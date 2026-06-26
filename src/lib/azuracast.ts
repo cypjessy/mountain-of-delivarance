@@ -263,7 +263,7 @@ function mapNowPlaying(raw: any): NowPlayingData {
       name: raw.station?.name || FALLBACK_NOW_PLAYING.station.name,
       shortName: raw.station?.shortcode || FALLBACK_NOW_PLAYING.station.shortName,
       isLive: raw.station?.is_streamer_live ?? false,
-      listenUrl: rawListenUrl.replace(/^http:\/\//i, "https://"),
+      listenUrl: rawListenUrl,
     },
     nowPlaying: raw.now_playing?.song
       ? {
