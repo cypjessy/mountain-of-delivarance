@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import AdminBottomNav from "@/components/admin/AdminBottomNav";
 import ToastBridge from "@/components/dashboard/ToastBridge";
 import { useAppStore } from "@/lib/useAppStore";
@@ -15,6 +16,7 @@ const statusOptions = [
 ];
 
 export default function AdminMeetingsPage() {
+  const router = useRouter();
   const userDoc = useAppStore((s) => s.userDoc);
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [loading, setLoading] = useState(true);
@@ -22,6 +24,8 @@ export default function AdminMeetingsPage() {
   const [editId, setEditId] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+
+  const [joiningId, setJoiningId] = useState<string | null>(null);
 
   const defaultDate = new Date().toISOString().slice(0, 10);
   const [form, setForm] = useState({
@@ -143,6 +147,25 @@ export default function AdminMeetingsPage() {
       setActionLoading(false);
       setDeleteConfirm(null);
     }
+  };
+
+  const joinMeeting = async (m: Meeting) => {
+    if (!m.roomName) {
+      showToast("Not Ready", "This meeting room isn't configured yet", "error", 3000);
+      return;
+    }
+
+    // If scheduled, first set to active
+    if (m.status === "scheduled") {
+      await updateMeeting(m.id!, { status: "active" });
+      setMeetings((prev) => prev.map((x) => x.id === m.id ? { ...x, status: "active" as Meeting["status"] } : x));
+    }
+
+    // Navigate to the premium host page
+    setJoiningId(m.id || null);
+    setTimeout(() => {
+      router.push(`/admin/meetings/host/${m.id}`);
+    }, 300);
   };
 
   const toggleStatus = async (m: Meeting) => {
@@ -277,6 +300,12 @@ export default function AdminMeetingsPage() {
         .form-input[type="date"]::-webkit-calendar-picker-indicator,
         .form-input[type="time"]::-webkit-calendar-picker-indicator { filter: invert(0.7); cursor: pointer; }
 
+        .join-btn.status { margin-left: auto; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 600; border: none; cursor: pointer; transition: all 0.15s ease; display: inline-flex; align-items: center; gap: 4px; }
+        .join-btn.status:active { transform: scale(0.95); }
+        .join-btn.status { background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end)); color: #fff; }
+        .join-btn.status:disabled { opacity: 0.5; cursor: not-allowed; }
+        .join-btn.status i { font-size: 10px; }
+
         .btn-primary { flex: 1; padding: 14px; background: linear-gradient(135deg, var(--gradient-blue), #2563EB); border: none; border-radius: var(--radius-md); color: #fff; font-size: 15px; font-weight: 700; cursor: pointer; transition: all 0.2s ease; display: flex; align-items: center; justify-content: center; gap: 8px; }
         .btn-primary:active { transform: scale(0.97); }
         .btn-primary:disabled { opacity: 0.6; }
@@ -394,6 +423,22 @@ export default function AdminMeetingsPage() {
                         <div className="meeting-status-row">
                           <div className={`status-dot ${m.status}`}></div>
                           <span className="status-label">{m.status}</span>
+                          {m.status !== "ended" && (
+                            <button
+                              className="join-btn status"
+                              onClick={() => joinMeeting(m)}
+                              disabled={joiningId === m.id}
+                              title="Join and speak"
+                            >
+                              {joiningId === m.id ? (
+                                <i className="fas fa-spinner fa-spin"></i>
+                              ) : m.status === "active" ? (
+                                <><i className="fas fa-broadcast-tower"></i> Join</>
+                              ) : (
+                                <><i className="fas fa-broadcast-tower"></i> Go Live</>
+                              )}
+                            </button>
+                          )}
                           <button
                             className={`status-btn ${m.status === "scheduled" ? "go" : m.status === "active" ? "end-btn" : "reset"}`}
                             onClick={() => toggleStatus(m)}

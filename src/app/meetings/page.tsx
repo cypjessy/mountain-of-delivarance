@@ -1,28 +1,17 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import ToastBridge from "@/components/dashboard/ToastBridge";
-import { useAppStore } from "@/lib/useAppStore";
 import { getUpcomingMeetings } from "@/lib/meetings";
 import type { Meeting } from "@/lib/meetings";
 import BottomNavBar from "@/components/shared/BottomNavBar";
-import { apiFetch } from "@/lib/api";
-import { Room, RoomEvent, Track } from "livekit-client";
 
 export default function MeetingsPage() {
   const router = useRouter();
-  const userDoc = useAppStore((s) => s.userDoc);
-  const user = useAppStore((s) => s.user);
-
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [loading, setLoading] = useState(true);
   const [joiningId, setJoiningId] = useState<string | null>(null);
-  const [joinedRoom, setJoinedRoom] = useState<string | null>(null);
-  const [isMuted, setIsMuted] = useState(true);
-  const [participants, setParticipants] = useState<string[]>([]);
-  const [speakingParticipants, setSpeakingParticipants] = useState<Set<string>>(new Set());
-  const roomRef = useRef<Room | null>(null);
 
   function showToast(title: string, message: string, type: string, duration: number) {
     window.dispatchEvent(new CustomEvent("show-toast", { detail: { title, message, type, duration } }));
@@ -42,10 +31,7 @@ export default function MeetingsPage() {
 
   useEffect(() => { setTimeout(() => loadMeetings(), 0); }, [loadMeetings]);
 
-  const displayName = userDoc?.display_name || user?.displayName || user?.email?.split("@")[0] || "Member";
-  const identity = user?.uid || `member-${Date.now()}`;
-
-  const joinMeeting = async (meeting: Meeting) => {
+  const joinMeeting = (meeting: Meeting) => {
     if (!meeting.roomName) {
       showToast("Not Ready", "This meeting room isn't configured yet", "error", 3000);
       return;
@@ -54,98 +40,10 @@ export default function MeetingsPage() {
       showToast("Ended", "This meeting has already ended", "info", 2500);
       return;
     }
-
     setJoiningId(meeting.id || null);
-    try {
-      const res = await apiFetch("/api/livekit/token", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ roomName: meeting.roomName, identity }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Failed to get token");
-      }
-
-      const { token, url } = await res.json();
-      if (!url) {
-        throw new Error("LiveKit server URL not configured");
-      }
-
-      // Connect to LiveKit room
-      const room = new Room({
-        adaptiveStream: true,
-        dynacast: true,
-      });
-
-      room.on(RoomEvent.ParticipantConnected, (p) => {
-        setParticipants((prev) => [...prev.filter((n) => n !== p.identity), p.identity]);
-      });
-
-      room.on(RoomEvent.ParticipantDisconnected, (p) => {
-        setParticipants((prev) => prev.filter((n) => n !== p.identity));
-      });
-
-      room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
-        const speakingNames = new Set<string>();
-        for (const s of speakers) {
-          if (s.identity !== identity) {
-            speakingNames.add(s.identity);
-          }
-        }
-        setSpeakingParticipants(speakingNames);
-      });
-
-      room.on(RoomEvent.Disconnected, () => {
-        setJoinedRoom(null);
-        setParticipants([]);
-        setSpeakingParticipants(new Set());
-        roomRef.current = null;
-      });
-
-      await room.connect(url, token);
-
-      // Publish microphone track (handles permissions & mute state)
-      await room.localParticipant.setMicrophoneEnabled(false);
-
-      roomRef.current = room;
-      setJoinedRoom(meeting.roomName);
-
-      // Get initial participants from remote participants map
-      const remoteNames = Array.from(room.remoteParticipants.values()).map((p) => p.identity);
-      setParticipants(remoteNames);
-
-      showToast("Connected", `You've joined "${meeting.title}"`, "success", 3000);
-    } catch (e) {
-      console.error("Failed to join meeting:", e);
-      showToast("Connection Failed", e instanceof Error ? e.message : "Could not connect to meeting room", "error", 4000);
-    } finally {
-      setJoiningId(null);
-    }
-  };
-
-  const leaveMeeting = () => {
-    if (roomRef.current) {
-      roomRef.current.disconnect();
-      roomRef.current = null;
-    }
-    setJoinedRoom(null);
-    setParticipants([]);
-    setSpeakingParticipants(new Set());
-    setIsMuted(true);
-    showToast("Left", "You left the meeting", "info", 2000);
-  };
-
-  const toggleMute = async () => {
-    if (roomRef.current) {
-      try {
-        await roomRef.current.localParticipant.setMicrophoneEnabled(isMuted);
-      } catch (e) {
-        console.error("Toggle mute failed:", e);
-      }
-    }
-    setIsMuted(!isMuted);
+    setTimeout(() => {
+      router.push(`/meetings/listen/${meeting.id}`);
+    }, 300);
   };
 
   const isToday = (date: string) => date === new Date().toISOString().slice(0, 10);
@@ -159,67 +57,6 @@ export default function MeetingsPage() {
     };
     return `${fmt(startTime)} — ${fmt(endTime)}`;
   };
-
-  // Active call overlay
-  if (joinedRoom) {
-    return (
-      <>
-        <style>{`
-          :root { --primary: #E8A838; --bg: #0F0F0F; --surface: #1A1A1A; --surface-elevated: #242424; --text-primary: #FFFFFF; --text-secondary: #A0A0A0; --text-tertiary: #6B6B6B; --border: #2A2A2A; --success: #4ADE80; --error: #FF6B6B; --gradient-start: #E8A838; --gradient-end: #D4762A; --gradient-blue: #3B82F6; --shadow-soft: 0 4px 20px rgba(232,168,56,0.15); }
-          * { margin: 0; padding: 0; box-sizing: border-box; font-family: Inter, -apple-system, BlinkMacSystemFont, sans-serif; }
-          html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text-primary); }
-          .call-ui { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; gap: 24px; }
-          .call-avatar { width: 100px; height: 100px; border-radius: 50%; background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end)); display: flex; align-items: center; justify-content: center; font-size: 40px; color: #fff; box-shadow: var(--shadow-soft); }
-          .call-name { font-size: 20px; font-weight: 700; text-align: center; }
-          .call-status { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--success); }
-          .call-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); animation: pulse 1.5s ease-in-out infinite; }
-          @keyframes pulse { 0%,100% { opacity:1;transform:scale(1); } 50% { opacity:0.4;transform:scale(1.5); } }
-          .call-participants { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; max-width: 320px; }
-          .participant-chip { display: flex; align-items: center; gap: 8px; padding: 8px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 20px; font-size: 13px; font-weight: 600; transition: all 0.2s ease; }
-          .participant-chip.speaking { border-color: var(--success); box-shadow: 0 0 12px rgba(74,222,128,0.15); }
-          .participant-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-tertiary); }
-          .participant-dot.speaking { background: var(--success); animation: pulse 1s ease-in-out infinite; }
-          .call-controls { display: flex; gap: 20px; margin-top: 12px; }
-          .ctrl-btn { width: 56px; height: 56px; border-radius: 50%; border: none; display: flex; align-items: center; justify-content: center; font-size: 20px; cursor: pointer; transition: all 0.2s ease; }
-          .ctrl-btn:active { transform: scale(0.9); }
-          .ctrl-btn.mute { background: var(--surface); color: var(--text-primary); border: 1px solid var(--border); }
-          .ctrl-btn.muted { background: var(--error); color: #fff; }
-          .ctrl-btn.hangup { background: var(--error); color: #fff; }
-          .call-empty { font-size: 14px; color: var(--text-tertiary); text-align: center; padding: 20px; }
-        `}</style>
-        <div className="call-ui">
-          <div className="call-avatar"><i className="fas fa-phone-volume"></i></div>
-          <div className="call-name">You&apos;re in the meeting</div>
-          <div className="call-status">
-            <span className="call-dot"></span>
-            <span>{participants.length > 0 ? `${participants.length + 1} participant${participants.length !== 0 ? "s" : ""}` : "Connected"}</span>
-          </div>
-          {participants.length > 0 ? (
-            <div className="call-participants">
-              {participants.map((p) => (
-                <div key={p} className={`participant-chip ${speakingParticipants.has(p) ? "speaking" : ""}`}>
-                  <div className={`participant-dot ${speakingParticipants.has(p) ? "speaking" : ""}`}></div>
-                  {p}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="call-empty">
-              <p>Waiting for others to join...</p>
-            </div>
-          )}
-          <div className="call-controls">
-            <button className={`ctrl-btn ${isMuted ? "muted" : "mute"}`} onClick={toggleMute} title={isMuted ? "Unmute" : "Mute"}>
-              <i className={`fas fa-${isMuted ? "microphone-slash" : "microphone"}`}></i>
-            </button>
-            <button className="ctrl-btn hangup" onClick={leaveMeeting} title="Leave Meeting">
-              <i className="fas fa-phone-slash"></i>
-            </button>
-          </div>
-        </div>
-      </>
-    );
-  }
 
   return (
     <>

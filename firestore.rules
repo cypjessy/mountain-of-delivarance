@@ -181,6 +181,12 @@ service cloud.firestore {
       allow create, update, delete: if isAdmin();
     }
 
+    // Meetings (LiveKit audio meetings)
+    match /meetings/{meetingId} {
+      allow read: if isAuth();
+      allow create, update, delete: if isAdmin();
+    }
+
     // Giving records — members can create their own, admins can CRUD all
     match /giving/{givingId} {
       allow read: if isAdmin() || (isAuth() && resource.data.memberId == request.auth.uid);

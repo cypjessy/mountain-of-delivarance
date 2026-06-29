@@ -1,3 +1,4 @@
+import { SignJWT } from "jose";
 import { db } from "@/lib/firebase";
 import {
   doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc,
@@ -80,4 +81,72 @@ export async function deleteMeeting(id: string): Promise<void> {
 /** Generate a unique room name for a meeting */
 export function generateRoomName(meetingId: string): string {
   return `meeting-${meetingId}`;
+}
+
+/** Get the LiveKit server URL from env */
+export function getLiveKitUrl(): string {
+  try {
+    return process.env.NEXT_PUBLIC_LIVEKIT_URL || "";
+  } catch {
+    return "";
+  }
+}
+
+/** Get the LiveKit API key from env */
+export function getLiveKitApiKey(): string {
+  try {
+    return process.env.NEXT_PUBLIC_LIVEKIT_API_KEY || "";
+  } catch {
+    return "";
+  }
+}
+
+/** Get the LiveKit API secret from env */
+export function getLiveKitApiSecret(): string {
+  try {
+    return process.env.NEXT_PUBLIC_LIVEKIT_API_SECRET || "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Generate a LiveKit access token directly in the browser (like AzuraCast).
+ * The token is a signed JWT that grants access to a specific room.
+ */
+export async function generateLiveKitToken(
+  roomName: string,
+  identity: string
+): Promise<{ token: string; url: string }> {
+  const apiKey = getLiveKitApiKey();
+  const apiSecret = getLiveKitApiSecret();
+  const url = getLiveKitUrl();
+
+  if (!apiKey || !apiSecret) {
+    throw new Error("LiveKit credentials not configured");
+  }
+  if (!url) {
+    throw new Error("LiveKit server URL not configured");
+  }
+
+  const secret = new TextEncoder().encode(apiSecret);
+
+  const token = await new SignJWT({
+    iss: apiKey,
+    sub: identity,
+    name: identity,
+    video: {
+      room: roomName,
+      roomJoin: true,
+      canPublish: true,
+      canSubscribe: true,
+      canPublishData: true,
+    },
+  })
+    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+    .setIssuedAt()
+    .setExpirationTime("1h")
+    .sign(secret);
+
+  return { token, url };
 }
