@@ -11,6 +11,7 @@ import { getGalleryPhotos } from "@/lib/content";
 import { getBunnyStorageStats, formatBytes } from "@/lib/bunny";
 import AlbumArt from "@/components/shared/AlbumArt";
 import { useAudio } from "@/lib/audio/AudioContext";
+import { usePlayConfig } from "@/lib/playControls";
 import AdminBottomNav from "@/components/admin/AdminBottomNav";
 import ToastBridge from "@/components/dashboard/ToastBridge";
 
@@ -195,7 +196,8 @@ export default function AdminPage() {
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const audio = useAudio();
-  const adminStreamUrl = radioNP?.station?.listenUrl || "";
+  const { config: playConfig } = usePlayConfig();
+  const adminStreamUrl = radioNP?.station?.listenUrl || playConfig.streamUrl || "";
   const isAdminPlaying = audio.isPlaying && audio.currentStreamUrl === adminStreamUrl;
 
   const toggleAdminPlay = useCallback(() => {
@@ -1671,7 +1673,7 @@ export default function AdminPage() {
                 <i className="fas fa-shuffle"></i>
               </button>
               <button className={`rh-play-btn ${isAdminPlaying ? "playing" : ""}`} onClick={toggleAdminPlay}>
-                <i className={`fas fa-${isAdminPlaying ? "pause" : "play"}`}></i>
+                <i className={`fas ${isAdminPlaying ? "fa-pause" : "fa-play"}`}></i>
                 <div className="rh-play-ring"></div>
               </button>
               <button className="rh-expand-btn" onClick={() => router.push("/admin/radio")} title="Open Radio">

@@ -2,6 +2,12 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
+
+// Required for static export — renders a shell that loads the meeting client-side
+export async function generateStaticParams() {
+  return [{ id: "placeholder" }];
+}
+
 import ToastBridge from "@/components/dashboard/ToastBridge";
 import { useAppStore } from "@/lib/useAppStore";
 import { getMeeting, updateMeeting, generateLiveKitToken, muteParticipant } from "@/lib/meetings";

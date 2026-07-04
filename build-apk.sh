@@ -28,14 +28,14 @@ echo "  Building Kingdom Seekers Church Nakuru APK"
 echo "=========================================="
 echo ""
 
-# Step 0: Backup and remove API routes (incompatible with static export)
-echo "[0/5] Excluding API routes from static export..."
+# Step 0: Backup and remove API routes & dynamic route pages (incompatible with static export)
+echo "[0/5] Excluding API routes and dynamic pages from static export..."
+
 API_DIR="$PROJECT_DIR/src/app/api"
 API_BACKUP_DIR="/tmp/church-app-api-backup"
 if [ -d "$API_DIR" ]; then
   rm -rf "$API_BACKUP_DIR"
   mkdir -p "$API_BACKUP_DIR"
-  # Move each subdirectory under api/ to the backup
   for d in "$API_DIR"/*/; do
     if [ -d "$d" ]; then
       base=$(basename "$d")
@@ -47,6 +47,26 @@ if [ -d "$API_DIR" ]; then
 else
   echo "  No API routes found — skipping"
 fi
+
+# Backup dynamic route pages (e.g. [id]) that can't be statically exported
+# The meetings [id] pages have generateStaticParams() so they can be exported.
+# Add new [id] pages here if they lack generateStaticParams().
+DYNAMIC_PAGES=(
+  # No pages currently need backup — all have generateStaticParams()
+)
+PAGES_BACKUP_DIR="/tmp/church-app-pages-backup"
+rm -rf "$PAGES_BACKUP_DIR"
+mkdir -p "$PAGES_BACKUP_DIR"
+for path in "${DYNAMIC_PAGES[@]}"; do
+  full="$PROJECT_DIR/$path"
+  if [ -d "$full" ]; then
+    base=$(echo "$path" | tr '/' '_')
+    mkdir -p "$PAGES_BACKUP_DIR/$(dirname "$base")"
+    cp -a "$full" "$PAGES_BACKUP_DIR/$base"
+    rm -rf "$full"
+    echo "  ✓ Backed up $path"
+  fi
+done
 echo ""
 
 # Step 1: Static export
@@ -56,8 +76,8 @@ NEXT_EXPORT=true npm run build
 echo "  ✓ Static export complete"
 echo ""
 
-# Step 2: Restore API routes
-echo "[2/5] Restoring API routes..."
+# Step 2: Restore API routes and dynamic pages
+echo "[2/5] Restoring API routes and dynamic pages..."
 if [ -d "$API_BACKUP_DIR" ]; then
   for d in "$API_BACKUP_DIR"/*/; do
     if [ -d "$d" ]; then
@@ -67,6 +87,19 @@ if [ -d "$API_BACKUP_DIR" ]; then
   done
   rm -rf "$API_BACKUP_DIR"
   echo "  ✓ API routes restored"
+fi
+if [ -d "$PAGES_BACKUP_DIR" ]; then
+  for path in "${DYNAMIC_PAGES[@]}"; do
+    base=$(echo "$path" | tr '/' '_')
+    backup_path="$PAGES_BACKUP_DIR/$base"
+    if [ -d "$backup_path" ]; then
+      full_restore="$PROJECT_DIR/$path"
+      mkdir -p "$(dirname "$full_restore")"
+      cp -a "$backup_path" "$full_restore"
+      echo "  ✓ Restored $path"
+    fi
+  done
+  rm -rf "$PAGES_BACKUP_DIR"
 fi
 echo ""
 

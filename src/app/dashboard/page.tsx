@@ -15,6 +15,7 @@ import { getNowPlaying, getSongHistory, getStationId, getPlaylists } from "@/lib
 import { getAlbums } from "@/lib/albums";
 import { getAllAlbumEntries } from "@/lib/albumEntries";
 import { useAudio } from "@/lib/audio/AudioContext";
+import { usePlayConfig } from "@/lib/playControls";
 import type { NowPlayingData, SongHistoryItem, Playlist } from "@/lib/azuracast";
 import type { Album } from "@/lib/albums";
 import type { AlbumEntry } from "@/lib/albumEntries";
@@ -403,6 +404,7 @@ export default function DashboardPage() {
 
   const imageViewer = useImageLightbox();
   const audio = useAudio();
+  const { config: playConfig } = usePlayConfig();
 
   // Music controls plugin disabled due to native crash on Android
   // const musicControls = useMusicControls({...});

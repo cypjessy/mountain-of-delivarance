@@ -636,31 +636,6 @@ export default function LoginPage() {
             text-decoration: none;
         }
 
-        .admin-portal-btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            margin-top: 24px;
-            padding: 10px 20px;
-            background: transparent;
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            color: var(--text-tertiary);
-            font-size: 13px;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            font-family: inherit;
-        }
-
-        .admin-portal-btn:active {
-            background: var(--surface);
-            border-color: var(--primary);
-            color: var(--primary);
-        }
-
-        .admin-portal-btn i { font-size: 14px; }
-
         @media (min-width: 480px) {
             .app-container {
                 max-width: 480px;

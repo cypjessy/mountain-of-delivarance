@@ -1,5 +1,6 @@
 import { SignJWT } from "jose";
 import { db } from "@/lib/firebase";
+import { apiFetch } from "@/lib/api";
 import {
   doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc,
   collection, query, orderBy, where, serverTimestamp,
@@ -89,7 +90,7 @@ export async function muteParticipant(
   identity: string,
   trackSid?: string
 ): Promise<void> {
-  const res = await fetch("/api/livekit/mute", {
+  const res = await apiFetch("/api/livekit/mute", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ roomName, identity, trackSid: trackSid || null }),
