@@ -164,7 +164,7 @@ export default function AdminMeetingsPage() {
     // Navigate to the premium host page
     setJoiningId(m.id || null);
     setTimeout(() => {
-      router.push(`/admin/meetings/host/${m.id}`);
+      router.push(`/admin/meetings/host?id=${m.id}`);
     }, 300);
   };
 

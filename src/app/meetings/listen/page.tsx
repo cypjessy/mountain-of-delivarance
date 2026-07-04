@@ -1,12 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useRouter, useParams } from "next/navigation";
-
-// Required for static export — renders a shell that loads the meeting client-side
-export async function generateStaticParams() {
-  return [{ id: "placeholder" }];
-}
+import { useRouter, useSearchParams } from "next/navigation";
 
 import ToastBridge from "@/components/dashboard/ToastBridge";
 import BottomNavBar from "@/components/shared/BottomNavBar";
@@ -17,8 +12,8 @@ import { Room, RoomEvent } from "livekit-client";
 
 export default function MemberListenPage() {
   const router = useRouter();
-  const params = useParams();
-  const meetingId = params?.id as string;
+  const searchParams = useSearchParams();
+  const meetingId = searchParams?.get("id") || "";
   const userDoc = useAppStore((s) => s.userDoc);
   const user = useAppStore((s) => s.user);
 

@@ -1,6 +1,5 @@
 import { SignJWT } from "jose";
 import { db } from "@/lib/firebase";
-import { apiFetch } from "@/lib/api";
 import {
   doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc,
   collection, query, orderBy, where, serverTimestamp,
@@ -84,20 +83,65 @@ export function generateRoomName(meetingId: string): string {
   return `meeting-${meetingId}`;
 }
 
-/** Mute a participant's audio track(s) via the server API */
+/**
+ * Mute a remote participant's audio by calling the LiveKit Server REST API directly.
+ * Credentials are already exposed client-side via NEXT_PUBLIC_* env vars.
+ */
 export async function muteParticipant(
   roomName: string,
   identity: string,
-  trackSid?: string
+  _trackSid?: string
 ): Promise<void> {
-  const res = await apiFetch("/api/livekit/mute", {
+  const apiKey = getLiveKitApiKey();
+  const apiSecret = getLiveKitApiSecret();
+  const livekitUrl = getLiveKitUrl();
+
+  if (!apiKey || !apiSecret || !livekitUrl) {
+    throw new Error("LiveKit credentials not configured");
+  }
+
+  // Build a server admin token (short-lived, grants room admin)
+  const secret = new TextEncoder().encode(apiSecret);
+  const adminToken = await new SignJWT({
+    iss: apiKey,
+    sub: "admin",
+    video: {
+      room: roomName,
+      roomAdmin: true,
+      roomJoin: false,
+      canPublish: false,
+      canSubscribe: false,
+    },
+  })
+    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+    .setIssuedAt()
+    .setExpirationTime("5m")
+    .sign(secret);
+
+  // Derive the HTTP base from the WebSocket URL — use same host:port for LiveKit HTTP API
+  const httpBase = livekitUrl.replace(/^wss?:\/\//, "https://");
+
+  // Use UpdateParticipant (mutes all tracks) when no specific track_sid, otherwise MutePublishedTrack
+  const endpoint = _trackSid
+    ? `${httpBase}/twirp/livekit.RoomService/MutePublishedTrack`
+    : `${httpBase}/twirp/livekit.RoomService/UpdateParticipant`;
+
+  const body = _trackSid
+    ? JSON.stringify({ room: roomName, identity, track_sid: _trackSid, muted: true })
+    : JSON.stringify({ room: roomName, identity, muted: true });
+
+  const res = await fetch(endpoint, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ roomName, identity, trackSid: trackSid || null }),
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${adminToken}`,
+    },
+    body,
   });
+
   if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error((data as { error?: string }).error || "Failed to mute participant");
+    const text = await res.text().catch(() => "");
+    throw new Error(`Failed to mute participant: ${res.status} ${text}`);
   }
 }
 

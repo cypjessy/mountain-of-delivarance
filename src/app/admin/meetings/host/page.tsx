@@ -1,12 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { useRouter, useParams } from "next/navigation";
-
-// Required for static export — renders a shell that loads the meeting client-side
-export async function generateStaticParams() {
-  return [{ id: "placeholder" }];
-}
+import { useRouter, useSearchParams } from "next/navigation";
 
 import ToastBridge from "@/components/dashboard/ToastBridge";
 import { useAppStore } from "@/lib/useAppStore";
@@ -16,8 +11,8 @@ import { Room, RoomEvent, Track } from "livekit-client";
 
 export default function AdminMeetingHostPage() {
   const router = useRouter();
-  const params = useParams();
-  const meetingId = params?.id as string;
+  const searchParams = useSearchParams();
+  const meetingId = searchParams?.get("id") || "";
   const userDoc = useAppStore((s) => s.userDoc);
   const user = useAppStore((s) => s.user);
 
@@ -30,6 +25,7 @@ export default function AdminMeetingHostPage() {
   const [elapsed, setElapsed] = useState(0);
   const [audioParticipants, setAudioParticipants] = useState<Map<string, string[]>>(new Map()); // identity → trackSid[]
   const [muteloading, setMuteloading] = useState<Set<string>>(new Set());
+  const [micEnabled, setMicEnabled] = useState(false);
   const roomRef = useRef<Room | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const meetingRef = useRef<Meeting | null>(null);
@@ -135,11 +131,9 @@ export default function AdminMeetingHostPage() {
         setSpeakingParticipants(new Set());
         setAudioParticipants(new Map());
         roomRef.current = null;
+        setMicEnabled(false);
         if (timerRef.current) clearInterval(timerRef.current);
       });
-
-      // Ensure audio context is started (needed for mobile/Android WebView)
-      await room.startAudio().catch(() => {});
 
       await room.connect(url, token);
 
@@ -159,8 +153,18 @@ export default function AdminMeetingHostPage() {
           });
         }
       }
-      await room.localParticipant.setMicrophoneEnabled(true);
+      // On mobile/Android WebView, audio autoplay and getUserMedia require a user gesture.
+      // Set up a one-tap handler to resume AudioContext on first interaction.
+      const startAudioOnce = () => {
+        room.startAudio().catch(() => {});
+        document.removeEventListener('click', startAudioOnce);
+        document.removeEventListener('touchstart', startAudioOnce);
+      };
+      document.addEventListener('click', startAudioOnce, { once: true });
+      document.addEventListener('touchstart', startAudioOnce, { once: true });
 
+      // Don't auto-enable mic — on Android WebView getUserMedia requires a user gesture.
+      // Admin taps the mic button to enable speaking (user gesture triggers mic permission).
       roomRef.current = room;
       meetingRef.current = m;
       setConnected(true);
@@ -214,6 +218,24 @@ export default function AdminMeetingHostPage() {
       showToast("Error", e instanceof Error ? e.message : "Failed to mute all", "error", 3000);
     } finally {
       setMuteloading(new Set());
+    }
+  };
+
+  const toggleMic = async () => {
+    const room = roomRef.current;
+    if (!room) return;
+    try {
+      if (micEnabled) {
+        await room.localParticipant.setMicrophoneEnabled(false);
+        setMicEnabled(false);
+      } else {
+        await room.localParticipant.setMicrophoneEnabled(true);
+        setMicEnabled(true);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Could not access microphone";
+      console.error("Toggle mic failed:", e);
+      showToast("Mic Error", msg, "error", 4000);
     }
   };
 
@@ -724,6 +746,18 @@ export default function AdminMeetingHostPage() {
           transform: scale(0.9);
         }
 
+        .ctrl-btn.mic-on {
+          background: rgba(74,222,128,0.15);
+          color: var(--success);
+          border: 1px solid rgba(74,222,128,0.2);
+        }
+
+        .ctrl-btn.mic-off {
+          background: rgba(255,107,107,0.15);
+          color: var(--error);
+          border: 1px solid rgba(255,107,107,0.2);
+        }
+
         .ctrl-btn.end-call {
           width: 56px;
           height: 56px;
@@ -910,8 +944,8 @@ export default function AdminMeetingHostPage() {
 
               <div className="participants-grid">
                 {/* Host (admin) */}
-                <div className="participant-card">
-                  <div className="participant-avatar speaking-ring">
+                <div className={`participant-card ${micEnabled ? "speaking" : ""}`}>
+                  <div className={`participant-avatar ${micEnabled ? "speaking-ring" : ""}`}>
                     {identity.charAt(0).toUpperCase()}
                   </div>
                   <div className="participant-info">
@@ -919,11 +953,17 @@ export default function AdminMeetingHostPage() {
                       {userDoc?.display_name || "Admin"}
                       <span className="you-chip" style={{ marginLeft: 8 }}>Host</span>
                     </div>
-                    <div className="participant-role">Speaking</div>
+                    <div className="participant-role">{micEnabled ? "Speaking" : "Mic off"}</div>
                   </div>
-                  <div className="speaking-wave">
-                    <span></span><span></span><span></span><span></span>
-                  </div>
+                  {micEnabled ? (
+                    <div className="speaking-wave">
+                      <span></span><span></span><span></span><span></span>
+                    </div>
+                  ) : (
+                    <div className="muted-icon" title="Click microphone button to speak">
+                      <i className="fas fa-microphone-slash"></i>
+                    </div>
+                  )}
                 </div>
 
                 {/* Remote participants */}
@@ -994,6 +1034,13 @@ export default function AdminMeetingHostPage() {
               </div>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <button
+                className={`ctrl-btn ${micEnabled ? "mic-on" : "mic-off"}`}
+                onClick={toggleMic}
+                title={micEnabled ? "Mute microphone" : "Unmute microphone"}
+              >
+                <i className={`fas fa-${micEnabled ? "microphone" : "microphone-slash"}`}></i>
+              </button>
               {audioParticipants.size > 0 && (
                 <button onClick={handleMuteAll} disabled={muteloading.size > 0}
                   style={{

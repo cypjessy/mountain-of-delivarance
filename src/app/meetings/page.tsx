@@ -42,7 +42,7 @@ export default function MeetingsPage() {
     }
     setJoiningId(meeting.id || null);
     setTimeout(() => {
-      router.push(`/meetings/listen/${meeting.id}`);
+      router.push(`/meetings/listen?id=${meeting.id}`);
     }, 300);
   };
 
