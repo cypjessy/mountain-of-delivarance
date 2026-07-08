@@ -562,69 +562,6 @@ export default function LoginPage() {
 
         .login-footer a:active { opacity: 0.7; }
 
-        .admin-reg-toggle {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 12px;
-            color: var(--text-tertiary);
-            background: none;
-            border: none;
-            cursor: pointer;
-            margin-top: 16px;
-            padding: 6px 12px;
-            border-radius: 8px;
-            transition: all 0.2s ease;
-        }
-
-        .admin-reg-toggle:hover { color: var(--text-secondary); background: var(--surface); }
-        .admin-reg-toggle:active { opacity: 0.7; }
-
-        .admin-reg-form {
-            margin-top: 12px;
-            display: flex;
-            gap: 8px;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .admin-reg-input {
-            flex: 1;
-            max-width: 200px;
-            padding: 10px 14px;
-            background: var(--surface);
-            border: 1.5px solid var(--border);
-            border-radius: 12px;
-            color: var(--text-primary);
-            font-size: 14px;
-            outline: none;
-            transition: all 0.2s ease;
-        }
-
-        .admin-reg-input:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(232,168,56,0.08);
-        }
-
-        .admin-reg-input::placeholder {
-            color: var(--text-tertiary);
-        }
-
-        .admin-reg-btn {
-            padding: 10px 16px;
-            background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
-            border: none;
-            border-radius: 12px;
-            color: #fff;
-            font-size: 13px;
-            font-weight: 700;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            white-space: nowrap;
-        }
-
-        .admin-reg-btn:active { transform: scale(0.95); }
-        .admin-reg-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
         .modal-overlay {
             position: fixed;

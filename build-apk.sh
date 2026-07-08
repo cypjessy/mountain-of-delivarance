@@ -11,7 +11,7 @@ set -euo pipefail
 #   6. Copies the APK to ~/Documents
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
-OUTPUT_NAME="Kingdom Seekers Church Nakuru.apk"
+OUTPUT_NAME="CHRISTIAN REVIVAL CHURCH.apk"
 OUTPUT_PATH="$HOME/Documents/$OUTPUT_NAME"
 JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-21-openjdk}"
 
@@ -24,7 +24,7 @@ JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-21-openjdk}"
 # from a bundled APK unless the backend is on the same host).
 
 echo "=========================================="
-echo "  Building Kingdom Seekers Church Nakuru APK"
+echo "  Building CHRISTIAN REVIVAL CHURCH APK"
 echo "=========================================="
 echo ""
 

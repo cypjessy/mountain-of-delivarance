@@ -4,7 +4,6 @@ import React from "react";
 import type { Playlist, StationFile, QueueItem } from "@/lib/azuracast";
 import { getApiBase, toggleAutoDJ, togglePlaylistEnabled as apiTogglePlaylist, createPlaylist as apiCreatePlaylist, addSongsToPlaylist as apiAddSongs } from "@/lib/azuracast";
 import { hapticSuccess } from "@/lib/haptics";
-import RadioEmbed from "@/components/shared/RadioEmbed";
 
 interface RadioOverviewTabProps {
   overviewNP: any | null;
@@ -259,13 +258,7 @@ export function RadioOverviewTab(props: RadioOverviewTabProps) {
         </div>
       </div>
 
-          {/* Now Playing - Premium AzuraCast Embedded Player */}
-          <div style={{ background: "var(--surface-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 0, overflow: "hidden" }}>
-            <RadioEmbed
-              src="https://azuracast.histoview.co.ke/public/christian_revival_church/embed?autoplay=1&rounded=1&allow_popup=1&continuous=1"
-              title="CHRISTIAN REVIVAL CHURCH Radio Player"
-            />
-          </div>
+
 
       {/* Quick Actions */}
       <div className="section-block">

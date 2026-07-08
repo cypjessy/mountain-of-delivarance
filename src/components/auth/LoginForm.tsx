@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { signInWithEmailAndPassword, signInWithPopup, createUserWithEmailAndPassword, updateProfile, sendEmailVerification } from "firebase/auth";
-import { doc, getDoc, setDoc } from "firebase/firestore";
+import { signInWithEmailAndPassword, signInWithPopup } from "firebase/auth";
+import { doc, getDoc } from "firebase/firestore";
 import { useRouter } from "next/navigation";
 import { hapticSuccess, hapticError } from "@/lib/haptics";
 import { auth, db, googleProvider } from "@/lib/firebase";
@@ -20,77 +20,6 @@ export default function LoginForm() {
   const [rememberMe, setRememberMe] = useState(true);
   const [hasBiometric, setHasBiometric] = useState(false);
   const [biometricLoading, setBiometricLoading] = useState(false);
-  const [showAdminRegForm, setShowAdminRegForm] = useState(false);
-  const [adminName, setAdminName] = useState("");
-  const [adminEmail, setAdminEmail] = useState("");
-  const [adminPassword, setAdminPassword] = useState("");
-  const [adminLoading, setAdminLoading] = useState(false);
-  const [adminError, setAdminError] = useState("");
-
-  async function handleAdminRegister(e: React.FormEvent) {
-    e.preventDefault();
-    setAdminError("");
-
-    if (!adminName.trim()) { setAdminError("Please enter your full name"); return; }
-    if (!adminEmail.includes("@")) { setAdminError("Please enter a valid email"); return; }
-    if (adminPassword.length < 6) { setAdminError("Password must be at least 6 characters"); return; }
-
-    setAdminLoading(true);
-    try {
-      const result = await createUserWithEmailAndPassword(auth, adminEmail, adminPassword);
-      const firebaseUser = result.user;
-
-      await updateProfile(firebaseUser, { displayName: adminName });
-
-      const userDoc = {
-        uid: firebaseUser.uid,
-        email: adminEmail,
-        display_name: adminName,
-        photo_url: firebaseUser.photoURL || "",
-        church_id: process.env.NEXT_PUBLIC_CHURCH_ID || "christian_revival_church",
-        role: "admin" as const,
-        phone: "",
-        is_verified: false,
-        notification_preferences: {
-          live_radio: true,
-          youtube_live: true,
-          new_sermons: true,
-          new_photos: true,
-          event_reminders: true,
-        },
-        created_at: Date.now(),
-        last_seen: Date.now(),
-      };
-
-      await setDoc(doc(db, "users", firebaseUser.uid), userDoc);
-
-      // Send email verification
-      try { await sendEmailVerification(firebaseUser); } catch {}
-
-      showToast("Admin Account Created!", `Welcome, ${adminName}! You now have admin access.`, "success", 4000);
-      setShowAdminRegForm(false);
-      setAdminName("");
-      setAdminEmail("");
-      setAdminPassword("");
-
-      setTimeout(() => router.push("/admin"), 800);
-    } catch (err: unknown) {
-      const e = err as { code?: string; message?: string };
-      const code = e.code;
-      if (code === "auth/email-already-in-use") {
-        setAdminError("This email is already registered. Try signing in.");
-      } else if (code === "auth/weak-password") {
-        setAdminError("Password should be at least 6 characters");
-      } else if (code === "auth/invalid-email") {
-        setAdminError("Invalid email address");
-      } else {
-        setAdminError(e.message || "Registration failed");
-      }
-    } finally {
-      setAdminLoading(false);
-    }
-  }
-
   function showToast(title: string, message: string, type: string, duration = 3000) {
     window.dispatchEvent(new CustomEvent("show-toast", { detail: { title, message, type, duration } }));
   }
@@ -393,58 +322,7 @@ export default function LoginForm() {
           </a>
         </p>
 
-        <button className="admin-reg-toggle" onClick={() => { setShowAdminRegForm(!showAdminRegForm); setAdminError(""); }}>
-          <i className="fas fa-shield-halved"></i>
-          {showAdminRegForm ? "Cancel" : "Register as Admin"}
-        </button>
 
-        {showAdminRegForm && (
-          <form className="admin-reg-form" onSubmit={handleAdminRegister} style={{ flexDirection: "column", alignItems: "stretch", gap: 10 }}>
-            {adminError && (
-              <div style={{
-                padding: "8px 12px",
-                background: "rgba(255,107,107,0.1)",
-                border: "1px solid rgba(255,107,107,0.2)",
-                borderRadius: 10,
-                fontSize: 12,
-                color: "var(--error)",
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-              }}>
-                <i className="fas fa-circle-exclamation"></i>
-                <span>{adminError}</span>
-              </div>
-            )}
-            <input
-              className="admin-reg-input"
-              type="text"
-              placeholder="Full name"
-              value={adminName}
-              onChange={(e) => setAdminName(e.target.value)}
-              style={{ maxWidth: "100%" }}
-            />
-            <input
-              className="admin-reg-input"
-              type="email"
-              placeholder="Email address"
-              value={adminEmail}
-              onChange={(e) => setAdminEmail(e.target.value)}
-              style={{ maxWidth: "100%" }}
-            />
-            <input
-              className="admin-reg-input"
-              type="password"
-              placeholder="Password (min 6 chars)"
-              value={adminPassword}
-              onChange={(e) => setAdminPassword(e.target.value)}
-              style={{ maxWidth: "100%" }}
-            />
-            <button className="admin-reg-btn" type="submit" disabled={adminLoading}>
-              {adminLoading ? "Creating..." : "Register as Admin"}
-            </button>
-          </form>
-        )}
       </div>
     </>
   );

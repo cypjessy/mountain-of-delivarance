@@ -65,7 +65,7 @@ export default function AdminRadioPage() {
       if (config) setRadioConfig({
         stationName: config.stationName || "CHRISTIAN REVIVAL CHURCH Radio",
         description: config.description || "Radio Station",
-        stationId: config.stationId || "2",
+        stationId: config.stationId || "4",
         embedUrl: config.embedUrl || "https://azuracast.histoview.co.ke/public/christian_revival_church/embed?autoplay=1&rounded=1&allow_popup=1&continuous=1",
         streamUrl: config.streamUrl || "",
       });
@@ -169,7 +169,7 @@ export default function AdminRadioPage() {
       for (const s of strResult) {
         try {
           const res = await fetch(
-            `https://azuracast.histoview.co.ke/api/station/2/streamer/${s.id}/broadcasts`,
+            `${getApiBase()}/api/station/${getStationId()}/streamer/${s.id}/broadcasts`,
             { headers: { Authorization: `Bearer ${getApiKey()}` } }
           );
           if (res.ok) {
