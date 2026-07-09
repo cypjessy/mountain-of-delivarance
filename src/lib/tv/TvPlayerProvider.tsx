@@ -42,24 +42,30 @@ export function TvPlayerProvider({ children }: { children: React.ReactNode }) {
   const [visible, setVisible] = useState(false);
   const callbacksRef = useRef<TvPlayerCallbacks>({});
 
-  // Portal target — the DOM element to render the player into
-  const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
+  // Portal target — use ref + ready flag instead of direct state to avoid
+  // callback-ref cascades (registerTarget is fully stable, never changes identity).
+  const portalTargetRef = useRef<HTMLElement | null>(null);
+  const [portalReady, setPortalReady] = useState(false);
 
-  // Guard against re-applying the same seek value (prevents infinite loops
-  // when registerTarget is called repeatedly during re-renders).
+  // Synced ref so registerTarget can read videoId without depending on it
+  const videoIdRef = useRef<string | null>(null);
+  useEffect(() => { videoIdRef.current = videoId; }, [videoId]);
+
+  // Guard against re-applying the same seek value
   const lastAppliedSeekRef = useRef<number | undefined>(undefined);
 
+  // Stable — zero deps. Never changes identity, so callback refs that depend on
+  // this never force React to call old-ref(null) + new-ref(el) on unrelated renders.
   const registerTarget = useCallback((el: HTMLElement | null) => {
-    setPortalTarget(el);
-    // When a new target is registered and the player is already active,
-    // restore the latest seek so PlyrPlayer resumes at the correct position.
-    // Only re-apply if the seek value actually changed since last time.
-    if (el && videoId && latestSeekRef.current !== undefined &&
+    if (el === portalTargetRef.current && el !== null) return;
+    portalTargetRef.current = el;
+    setPortalReady(Boolean(el));
+    if (el && videoIdRef.current && latestSeekRef.current !== undefined &&
         latestSeekRef.current !== lastAppliedSeekRef.current) {
       lastAppliedSeekRef.current = latestSeekRef.current;
       setSeek(latestSeekRef.current);
     }
-  }, [videoId]);
+  }, []);
 
   const [playerKey, setPlayerKey] = useState(0);
   // Track the latest seek time so it's preserved when portal target changes between pages
@@ -87,26 +93,28 @@ export function TvPlayerProvider({ children }: { children: React.ReactNode }) {
   // Get border-radius from portal target for matching styling
   const [borderRadius, setBorderRadius] = useState("0");
   useEffect(() => {
-    if (!portalTarget) return;
+    const target = portalTargetRef.current;
+    if (!target) return;
     const updateBorderRadius = () => {
-      setBorderRadius(window.getComputedStyle(portalTarget).borderRadius);
+      setBorderRadius(window.getComputedStyle(target).borderRadius);
     };
     updateBorderRadius();
     const observer = new ResizeObserver(updateBorderRadius);
-    observer.observe(portalTarget);
+    observer.observe(target);
     return () => observer.disconnect();
-  }, [portalTarget]);
+  }, [portalReady]);
 
-  // Stable context value — avoids forcing consumer re-renders when only
-  // unrelated internal state changes.
+  // Stable context value
   const ctxValue = useMemo<TvPlayerContextValue>(() => ({
     registerTarget, play, hide, setCallbacks, visible, currentVideoId: videoId,
   }), [registerTarget, play, hide, setCallbacks, visible, videoId]);
 
+  const currentPortalTarget = portalTargetRef.current;
+
   return (
     <TvPlayerContext.Provider value={ctxValue}>
       {/* Portal — renders PlyrPlayer into the page's target element (natural document flow) */}
-      {visible && videoId && portalTarget && createPortal(
+      {visible && videoId && currentPortalTarget && createPortal(
         <div
           key={playerKey}
           style={{
@@ -126,7 +134,7 @@ export function TvPlayerProvider({ children }: { children: React.ReactNode }) {
             }}
           />
         </div>,
-        portalTarget
+        currentPortalTarget
       )}
       {children}
     </TvPlayerContext.Provider>
