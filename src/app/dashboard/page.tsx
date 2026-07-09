@@ -452,8 +452,6 @@ export default function DashboardPage() {
   const tvCurrentVideo = tvUserState && tvUserState.playlist.length > 0
     ? tvVideos.find((v) => v.id === tvUserState.playlist[tvUserState.currentIndex]) ?? null
     : null;
-  // Resume from Firestore seek position (0 if none)
-  const tvInitialSeek = tvUserState?.currentSeek ?? undefined;
 
   // Sync index ref when state changes
   useEffect(() => {
@@ -480,16 +478,16 @@ export default function DashboardPage() {
     tvPlayer.registerTarget(el);
   }, [tvPlayer.registerTarget]);
 
-  // Call play() when current video changes — skip if global player already on this video
-  // (prevents stale Firestore seek from rewinding on Android page navigation).
+  // Call play() when current video changes to a different one.
+  // Does NOT watch seek — avoids re-firing when tvUserState updates.
   useEffect(() => {
     if (tvCurrentVideo) {
       if (tvPlayer.currentVideoId === tvCurrentVideo.id && tvPlayer.visible) return;
-      tvPlayer.play(tvCurrentVideo.id, tvInitialSeek);
+      tvPlayer.play(tvCurrentVideo.id, tvUserState?.currentSeek || 0);
     } else {
       tvPlayer.hide();
     }
-  }, [tvCurrentVideo?.id, tvInitialSeek, tvPlayer]);
+  }, [tvCurrentVideo?.id, tvPlayer]);
 
   // Delay full content render to prevent ANR on Android WebView
   useEffect(() => {
@@ -744,38 +742,23 @@ export default function DashboardPage() {
     });
   }, [advanceTvVideo, handleTvTimeUpdate, tvPlayer]);
 
-  /* Save current progress to Firestore (used by interval + cleanup) */
+  /* Save current progress to Firestore. Only writes to Firestore — does NOT
+     update local tvUserState, avoiding cascading re-renders. */
   const saveTvProgress = useCallback(() => {
     const uid = auth.currentUser?.uid;
     const seek = lastTvSeekRef.current;
     const index = lastTvIndexRef.current;
-    console.log('[Dashboard TV Progress] Saving:', { uid: uid ? 'logged-in' : 'not-logged-in', index, seek });
     if (uid) {
-      // Always save, even if seek is 0 (important for index changes)
-      updateUserTvProgress(uid, index, seek).then(() => {
-        console.log('[Dashboard TV Progress] Saved successfully');
-      }).catch((err) => {
-        console.error('[Dashboard TV Progress] Failed to save:', err);
-      });
-      // Keep local state in sync so resume props don't lag behind live playback
-      setTvUserState((prev) =>
-        prev && (prev.currentIndex !== index || prev.currentSeek !== seek)
-          ? { ...prev, currentIndex: index, currentSeek: seek }
-          : prev
-      );
+      updateUserTvProgress(uid, index, seek).catch(() => {});
     }
   }, []);
 
-  /* Periodically save seek position (every 5s) */
+  /* Periodically save seek position (every 5s), regardless of state changes. */
   useEffect(() => {
-    if (!tvUserState || !auth.currentUser?.uid) return;
+    if (!auth.currentUser?.uid) return;
     const interval = setInterval(saveTvProgress, 5000);
-    return () => {
-      clearInterval(interval);
-      // Save on unmount/cleanup as well
-      saveTvProgress();
-    };
-  }, [tvUserState?.currentIndex, saveTvProgress]);
+    return () => { clearInterval(interval); saveTvProgress(); };
+  }, [saveTvProgress]);
 
   /* Save on page unload / tab hide */
   useEffect(() => {

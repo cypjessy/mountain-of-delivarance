@@ -136,28 +136,25 @@ export default function AdminPage() {
     tvPlayer.registerTarget(el);
   }, [tvPlayer.registerTarget]);
 
-  // Play current video whenever it changes (initial mount, advancement, page switches).
+  // Play current video when it changes to a different one (initial mount, advancement, page switches).
+  // Does NOT watch seek — avoids re-firing when saveTvProgress updates state.
   useEffect(() => {
     if (tvCurrentVideo && tvPlayer.currentVideoId !== tvCurrentVideo.id) {
-      tvPlayer.play(tvCurrentVideo.id, tvUserState?.currentSeek || undefined);
+      tvPlayer.play(tvCurrentVideo.id, tvUserState?.currentSeek || 0);
     }
-  }, [tvCurrentVideo?.id, tvPlayer, tvUserState?.currentSeek]);
+  }, [tvCurrentVideo?.id, tvPlayer]);
 
-  // Sync index ref when state changes
+  // Track current seek and index via refs for periodic Firestore saves
+  const handleTvTimeUpdate = useCallback((time: number) => {
+    lastTvSeekRef.current = time;
+  }, []);
+
+  // Keep index ref in sync with state (used by saveTvProgress)
   useEffect(() => {
     if (tvUserState) {
       lastTvIndexRef.current = tvUserState.currentIndex;
     }
   }, [tvUserState?.currentIndex]);
-
-  // Track current seek for periodic Firestore saves
-  const handleTvTimeUpdate = useCallback((time: number) => {
-    lastTvSeekRef.current = time;
-    // Log every 10 seconds to avoid spam
-    if (Math.floor(time) % 10 === 0) {
-      console.log('[Admin Dashboard TV Time Update]', { time, currentIndex: lastTvIndexRef.current });
-    }
-  }, []);
 
   // Advance to next video when current ends
   const handleAdvanceToNext = useCallback(() => {
@@ -178,34 +175,23 @@ export default function AdminPage() {
     });
   }, [handleAdvanceToNext, handleTvTimeUpdate, tvPlayer]);
 
-  /* Save current progress to Firestore (used by interval + cleanup) */
+  /* Save current progress to Firestore. Only writes to Firestore — does NOT
+     update local tvUserState, avoiding cascading re-renders. */
   const saveTvProgress = useCallback(() => {
     const uid = auth.currentUser?.uid;
     const seek = lastTvSeekRef.current;
     const index = lastTvIndexRef.current;
-    console.log('[Admin Dashboard TV Progress] Saving:', { uid, index, seek });
     if (uid) {
-      updateUserTvProgress(uid, index, seek).catch((err) => {
-        console.error('[Admin Dashboard TV Progress] Failed to save:', err);
-      });
-      setTvUserState((prev) =>
-        prev && (prev.currentIndex !== index || prev.currentSeek !== seek)
-          ? { ...prev, currentIndex: index, currentSeek: seek }
-          : prev
-      );
+      updateUserTvProgress(uid, index, seek).catch(() => {});
     }
   }, []);
 
-  /* Periodically save seek position (every 5s) */
+  /* Periodically save seek position (every 5s), regardless of state changes. */
   useEffect(() => {
-    if (!tvUserState || !auth.currentUser?.uid) return;
+    if (!auth.currentUser?.uid) return;
     const interval = setInterval(saveTvProgress, 5000);
-    return () => {
-      clearInterval(interval);
-      // Save on unmount/cleanup as well
-      saveTvProgress();
-    };
-  }, [tvUserState?.currentIndex, saveTvProgress]);
+    return () => { clearInterval(interval); saveTvProgress(); };
+  }, [saveTvProgress]);
 
   /* Save on page unload / tab hide */
   useEffect(() => {
