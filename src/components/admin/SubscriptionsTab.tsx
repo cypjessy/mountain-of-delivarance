@@ -52,6 +52,32 @@ function formatTraffic(mbps: number) {
   return `${mbps.toFixed(0)} Mbps`;
 }
 
+function getNextBillingDate(): Date {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  // Due on the 10th
+  const dueThisMonth = new Date(year, month, 10, 12, 0, 0);
+  if (now < dueThisMonth) return dueThisMonth;
+  // Next month's 10th
+  return new Date(year, month + 1, 10, 12, 0, 0);
+}
+
+function getCountdown(ms: number) {
+  if (ms <= 0) return { days: 0, hours: 0, minutes: 0, seconds: 0 };
+  const totalSec = Math.floor(ms / 1000);
+  return {
+    days: Math.floor(totalSec / 86400),
+    hours: Math.floor((totalSec % 86400) / 3600),
+    minutes: Math.floor((totalSec % 3600) / 60),
+    seconds: totalSec % 60,
+  };
+}
+
+function formatMonth(date: Date): string {
+  return date.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+}
+
 // ═══════════════════════════════════════════════
 // Constants
 // ═══════════════════════════════════════════════
@@ -104,6 +130,47 @@ export default function SubscriptionsTab() {
 
     return () => clearInterval(interval);
   }, []);
+
+  // ════ Billing & Countdown ════
+  const [now, setNow] = useState(new Date());
+  const [paymentStatus, setPaymentStatus] = useState<"paid" | "pending" | "overdue">("pending");
+  const [paying, setPaying] = useState(false);
+  const [paidThisMonth, setPaidThisMonth] = useState(false);
+
+  const nextBilling = getNextBillingDate();
+  const diffMs = nextBilling.getTime() - now.getTime();
+  const countdown = getCountdown(diffMs);
+  const isOverdue = diffMs < 0;
+  const currentMonth = formatMonth(now);
+
+  // Tick every second for live countdown
+  useEffect(() => {
+    const interval = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Check if already paid this period
+  useEffect(() => {
+    // Reset paid status on the 11th of each month (after billing date)
+    const day = new Date().getDate();
+    if (day >= 11) {
+      setPaidThisMonth(false);
+    }
+  }, []);
+
+  async function handlePayNow() {
+    setPaying(true);
+    // Simulate payment processing with realistic animation
+    await new Promise((r) => setTimeout(r, 2000));
+    setPaidThisMonth(true);
+    setPaymentStatus("paid");
+    setPaying(false);
+    window.dispatchEvent(new CustomEvent("show-toast", {
+      detail: { title: "Payment Successful", message: "€29.60 paid · Server subscription active until next billing", type: "success", duration: 4000 },
+    }));
+    // Re-fetch countdown resets
+    setNow(new Date());
+  }
 
   // Simulate random events
   const [events, setEvents] = useState<string[]>([
@@ -524,6 +591,144 @@ export default function SubscriptionsTab() {
       `}</style>
 
       <div className="sub-scroll">
+
+        {/* ════ Billing & Countdown ════ */}
+        <div className="billing-card" style={{
+          background: `linear-gradient(135deg, ${paidThisMonth ? "rgba(74,222,128,0.08)" : "rgba(232,168,56,0.08)"} 0%, var(--surface-card) 100%)`,
+          border: `1px solid ${paidThisMonth ? "rgba(74,222,128,0.2)" : "rgba(232,168,56,0.2)"}`,
+          borderRadius: "var(--radius-lg)",
+          padding: "20px",
+          marginBottom: 20,
+          position: "relative",
+          overflow: "hidden",
+        }}>
+          {/* Glow */}
+          <div style={{
+            position: "absolute", top: "-40%", right: "-10%",
+            width: 160, height: 160,
+            background: `radial-gradient(circle, ${paidThisMonth ? "rgba(74,222,128,0.08)" : "rgba(232,168,56,0.08)"} 0%, transparent 70%)`,
+            pointerEvents: "none",
+          }} />
+
+          {/* Header */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
+              <i className="fas fa-credit-card" style={{ color: "var(--primary)" }}></i>
+              Subscription Billing
+            </div>
+            <div style={{
+              fontSize: 11, fontWeight: 700, padding: "4px 12px",
+              borderRadius: 20,
+              background: paidThisMonth ? "rgba(74,222,128,0.12)" : isOverdue ? "rgba(239,68,68,0.12)" : "rgba(232,168,56,0.12)",
+              color: paidThisMonth ? "#4ADE80" : isOverdue ? "#EF4444" : "var(--primary)",
+            }}>
+              {paidThisMonth
+                ? <><i className="fas fa-check-circle"></i> Paid</>
+                : isOverdue
+                  ? <><i className="fas fa-exclamation-circle"></i> Overdue</>
+                  : <><i className="fas fa-clock"></i> Pending</>
+              }
+            </div>
+          </div>
+
+          {/* Amount */}
+          <div style={{ marginBottom: 16, textAlign: "center" }}>
+            <div style={{ fontSize: 32, fontWeight: 800, color: paidThisMonth ? "#4ADE80" : "var(--primary)", fontVariantNumeric: "tabular-nums" }}>
+              €29.60
+            </div>
+            <div style={{ fontSize: 12, color: "var(--text-tertiary)", marginTop: 2 }}>
+              {currentMonth}
+            </div>
+          </div>
+
+          {/* Countdown */}
+          <div style={{
+            background: "rgba(0,0,0,0.2)",
+            borderRadius: "var(--radius-md)",
+            padding: "14px",
+            marginBottom: 16,
+            textAlign: "center",
+          }}>
+            <div style={{ fontSize: 11, color: "var(--text-tertiary)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 8 }}>
+              {paidThisMonth ? "Next billing in" : isOverdue ? "Overdue by" : "Due in"}
+            </div>
+            <div style={{ display: "flex", justifyContent: "center", gap: 12 }}>
+              {[
+                { label: "Days", value: countdown.days },
+                { label: "Hours", value: countdown.hours },
+                { label: "Min", value: countdown.minutes },
+                { label: "Sec", value: countdown.seconds },
+              ].map((unit) => (
+                <div key={unit.label} style={{ textAlign: "center" }}>
+                  <div style={{
+                    fontSize: 22, fontWeight: 800,
+                    color: paidThisMonth ? "#4ADE80" : "var(--primary)",
+                    fontVariantNumeric: "tabular-nums",
+                    lineHeight: 1.1,
+                  }}>
+                    {String(unit.value).padStart(2, "0")}
+                  </div>
+                  <div style={{ fontSize: 9, color: "var(--text-tertiary)", textTransform: "uppercase", marginTop: 2 }}>
+                    {unit.label}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Due date info */}
+          <div style={{
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+            fontSize: 12, color: "var(--text-secondary)", marginBottom: 16,
+          }}>
+            <i className="fas fa-calendar-alt" style={{ color: "var(--text-tertiary)" }}></i>
+            Due on the <strong style={{ color: "var(--text-primary)" }}>10th</strong> of each month
+          </div>
+
+          {/* Pay Now button */}
+          <button
+            onClick={handlePayNow}
+            disabled={paying || paidThisMonth}
+            style={{
+              width: "100%",
+              padding: "16px",
+              border: "none",
+              borderRadius: "var(--radius-md)",
+              fontSize: 16,
+              fontWeight: 700,
+              cursor: (paying || paidThisMonth) ? "not-allowed" : "pointer",
+              transition: "all 0.2s",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+              background: paidThisMonth
+                ? "var(--surface-elevated)"
+                : "linear-gradient(135deg, var(--gradient-start), var(--gradient-end))",
+              color: paidThisMonth ? "var(--text-tertiary)" : "#fff",
+              opacity: (paying || paidThisMonth) ? 0.7 : 1,
+            }}
+          >
+            {paying ? (
+              <><i className="fas fa-spinner fa-spin"></i> Processing…</>
+            ) : paidThisMonth ? (
+              <><i className="fas fa-check-circle"></i> Paid for {currentMonth}</>
+            ) : (
+              <><i className="fas fa-lock"></i> Pay Now — €29.60</>
+            )}
+          </button>
+
+          {/* Payment history hint */}
+          {!paidThisMonth && !paying && (
+            <div style={{
+              fontSize: 11, color: "var(--text-tertiary)",
+              marginTop: 12, textAlign: "center",
+            }}>
+              <i className="fas fa-shield-halved" style={{ marginRight: 4, fontSize: 10 }}></i>
+              Secured via encrypted payment gateway
+            </div>
+          )}
+        </div>
 
         {/* ════ Server Monitoring ════ */}
         <div className="section-title" style={{ fontSize: 14, fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 12 }}>
