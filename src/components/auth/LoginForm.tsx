@@ -2,10 +2,10 @@
 
 import { useState, useEffect } from "react";
 import { signInWithEmailAndPassword, signInWithPopup } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
+import { doc } from "firebase/firestore";
 import { useRouter } from "next/navigation";
 import { hapticSuccess, hapticError } from "@/lib/haptics";
-import { auth, db, googleProvider } from "@/lib/firebase";
+import { auth, db, googleProvider, getDocWithRetry } from "@/lib/firebase";
 import { useAppStore } from "@/lib/useAppStore";
 import { churchConfig } from "@/lib/churchConfig";
 
@@ -69,20 +69,25 @@ export default function LoginForm() {
       const firebaseUser = result.user;
       setUser(firebaseUser);
 
-      const userDocRef = doc(db, "users", firebaseUser.uid);
-      const userSnap = await getDoc(userDocRef);
-
-      if (userSnap.exists()) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const userData = userSnap.data() as any;
-        setUserDoc(userData);
-        setChurchConfig(churchConfig);
-        showToast("Welcome Back!", `Signed in as ${userData.display_name || storedCreds.username}`, "success", 2500);
-        setTimeout(() => {
-          if (userData.role === "admin") router.push("/admin");
-          else router.push("/dashboard");
-        }, 500);
+      // Try to fetch user doc — if it fails (transient offline), navigate forward anyway
+      let userData: any = null;
+      try {
+        const userDocRef = doc(db, "users", firebaseUser.uid);
+        const userSnap = await getDocWithRetry(userDocRef);
+        if (userSnap.exists()) {
+          userData = userSnap.data() as any;
+          setUserDoc(userData);
+          setChurchConfig(churchConfig);
+        }
+      } catch (docErr) {
+        console.warn("[Login] Biometric doc fetch failed, navigating forward:", docErr);
       }
+
+      showToast("Welcome Back!", `Signed in as ${userData?.display_name || storedCreds.username}`, "success", 2500);
+      setTimeout(() => {
+        if (userData?.role === "admin") router.push("/admin");
+        else router.push("/dashboard");
+      }, 500);
     } catch {
       // User cancelled or biometric failed — silently reset
       setBiometricLoading(false);
@@ -110,38 +115,36 @@ export default function LoginForm() {
       const firebaseUser = result.user;
       setUser(firebaseUser);
 
-      // Fetch user doc
-      const userDocRef = doc(db, "users", firebaseUser.uid);
-      const userSnap = await getDoc(userDocRef);
-
-      if (userSnap.exists()) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const userData = userSnap.data() as any;
-        setUserDoc(userData);
-        setChurchConfig(churchConfig);
-
-        // Save email preference
-        try {
-          const { Preferences } = await import("@capacitor/preferences");
-          if (rememberMe) {
-            await Preferences.set({ key: "saved_email", value: email });
-          } else {
-            await Preferences.remove({ key: "saved_email" });
-          }
-        } catch {}
-
-        await hapticSuccess();
-
-        showToast("Welcome Back!", `Signed in as ${userData.display_name || email}`, "success", 2500);
-
-        setTimeout(() => {
-          if (userData.role === "admin") router.push("/admin");
-          else router.push("/dashboard");
-        }, 500);
-      } else {
-        showToast("Welcome!", "Account found. Setting up...", "info");
-        setTimeout(() => router.push("/dashboard"), 500);
+      // Try to fetch user doc — if it fails (transient offline), navigate forward anyway
+      let userData: any = null;
+      try {
+        const userDocRef = doc(db, "users", firebaseUser.uid);
+        const userSnap = await getDocWithRetry(userDocRef);
+        if (userSnap.exists()) {
+          userData = userSnap.data() as any;
+          setUserDoc(userData);
+          setChurchConfig(churchConfig);
+        }
+      } catch (docErr) {
+        console.warn("[Login] Doc fetch failed, navigating forward anyway:", docErr);
       }
+
+      // Save email preference
+      try {
+        const { Preferences } = await import("@capacitor/preferences");
+        if (rememberMe) {
+          await Preferences.set({ key: "saved_email", value: email });
+        } else {
+          await Preferences.remove({ key: "saved_email" });
+        }
+      } catch {}
+
+      await hapticSuccess();
+      showToast("Welcome Back!", `Signed in as ${userData?.display_name || email}`, "success", 2500);
+      setTimeout(() => {
+        if (userData?.role === "admin") router.push("/admin");
+        else router.push("/dashboard");
+      }, 500);
     } catch (err: unknown) {
       const e = err as { code?: string; message?: string };
       const code = e.code;
@@ -168,17 +171,22 @@ export default function LoginForm() {
       const firebaseUser = result.user;
       setUser(firebaseUser);
 
-      const userDocRef = doc(db, "users", firebaseUser.uid);
-      const userSnap = await getDoc(userDocRef);
+      // Try to fetch user doc — if it fails (transient offline), navigate forward anyway
+      let userData: any = null;
+      try {
+        const userDocRef = doc(db, "users", firebaseUser.uid);
+        const userSnap = await getDocWithRetry(userDocRef);
+        if (userSnap.exists()) {
+          userData = userSnap.data() as any;
+          setUserDoc(userData);
+          setChurchConfig(churchConfig);
+        }
+      } catch (docErr) {
+        console.warn("[Login] Google doc fetch failed, navigating forward:", docErr);
+      }
 
-      if (userSnap.exists()) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const userData = userSnap.data() as any;
-        setUserDoc(userData);
-        setChurchConfig(churchConfig);
-
+      if (userData) {
         showToast("Welcome Back!", `Signed in as ${userData.display_name || firebaseUser.displayName}`, "success", 2500);
-
         setTimeout(() => {
           if (userData.role === "admin") router.push("/admin");
           else router.push("/dashboard");

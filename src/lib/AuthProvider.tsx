@@ -2,9 +2,9 @@
 
 import { useEffect, useRef, type ReactNode } from "react";
 import { onAuthStateChanged } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
+import { doc } from "firebase/firestore";
 import { useRouter, usePathname } from "next/navigation";
-import { auth, db } from "@/lib/firebase";
+import { auth, db, getDocWithRetry } from "@/lib/firebase";
 import { useAppStore } from "@/lib/useAppStore";
 import type { UserDoc } from "@/lib/useAppStore";
 import { churchConfig } from "@/lib/churchConfig";
@@ -59,7 +59,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         try {
           const userDocRef = doc(db, "users", firebaseUser.uid);
-          const userSnap = await getDoc(userDocRef);
+          const userSnap = await getDocWithRetry(userDocRef);
 
           if (userSnap.exists()) {
             const userData = userSnap.data() as UserDoc;
@@ -88,8 +88,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             }
           }
         } catch (err) {
-          console.error("Error fetching user data:", err);
+          console.warn("[Auth] User doc fetch failed after retries:", err);
           setLoading(false);
+          // No navigation here — the LoginForm already navigates on explicit
+          // login, and auto-login will be resolved by the next auth state
+          // change or the useRequireRole hooks on protected pages.
         }
       } else {
         setUser(null);
