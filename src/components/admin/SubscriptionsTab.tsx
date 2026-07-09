@@ -7,6 +7,18 @@ import {
   loadPaystackSDK,
   PAYSTACK_PLANS,
 } from "@/lib/paystack";
+import {
+  getSubscriptionStatus,
+  recordPayment,
+  computeBalance,
+  getCurrentBillingPeriod,
+  getBillingPeriodLabel,
+  getNextBillingDate,
+  getCountdown,
+  PLAN_PRICES,
+  type SubscriptionStatus,
+} from "@/lib/subscriptions";
+import { Timestamp } from "firebase/firestore";
 
 // ═══════════════════════════════════════════════
 // Types
@@ -56,32 +68,6 @@ function formatUptime(seconds: number) {
 function formatTraffic(mbps: number) {
   if (mbps > 1000) return `${(mbps / 1000).toFixed(1)} Gbps`;
   return `${mbps.toFixed(0)} Mbps`;
-}
-
-function getNextBillingDate(): Date {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth();
-  // Due on the 10th
-  const dueThisMonth = new Date(year, month, 10, 12, 0, 0);
-  if (now < dueThisMonth) return dueThisMonth;
-  // Next month's 10th
-  return new Date(year, month + 1, 10, 12, 0, 0);
-}
-
-function getCountdown(ms: number) {
-  if (ms <= 0) return { days: 0, hours: 0, minutes: 0, seconds: 0 };
-  const totalSec = Math.floor(ms / 1000);
-  return {
-    days: Math.floor(totalSec / 86400),
-    hours: Math.floor((totalSec % 86400) / 3600),
-    minutes: Math.floor((totalSec % 3600) / 60),
-    seconds: totalSec % 60,
-  };
-}
-
-function formatMonth(date: Date): string {
-  return date.toLocaleDateString("en-US", { month: "long", year: "numeric" });
 }
 
 // ═══════════════════════════════════════════════
@@ -137,23 +123,41 @@ export default function SubscriptionsTab() {
     return () => clearInterval(interval);
   }, []);
 
-  // ════ Billing & Countdown ════
+  // ════ Billing & Countdown (Firestore-backed) ════
   const [now, setNow] = useState(new Date());
-  const [paymentStatus, setPaymentStatus] = useState<"paid" | "pending" | "overdue">("pending");
   const [paying, setPaying] = useState(false);
-  const [paidThisMonth, setPaidThisMonth] = useState(false);
-
-  const nextBilling = getNextBillingDate();
-  const diffMs = nextBilling.getTime() - now.getTime();
-  const countdown = getCountdown(diffMs);
-  const isOverdue = diffMs < 0;
-  const currentMonth = formatMonth(now);
+  const [subStatus, setSubStatus] = useState<SubscriptionStatus | null>(null);
+  const [loadingStatus, setLoadingStatus] = useState(true);
 
   // Tick every second for live countdown
   useEffect(() => {
     const interval = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(interval);
   }, []);
+
+  // Load subscription status from Firestore on mount and every 30s
+  useEffect(() => {
+    async function load() {
+      try {
+        const status = await getSubscriptionStatus();
+        setSubStatus(status);
+      } catch {
+        // silent
+      } finally {
+        setLoadingStatus(false);
+      }
+    }
+    load();
+    const interval = setInterval(load, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Compute payment status based on Firestore + calendar
+  const balance = computeBalance(subStatus);
+  const currentBillingPeriod = getCurrentBillingPeriod();
+  const currentMonthLabel = getBillingPeriodLabel(currentBillingPeriod);
+
+  // (isUpgraded is declared below in the upgrade section — we'll compute totalDue there)
 
   // ════ Upgrade Toggle ════
   const [showUpgrade, setShowUpgrade] = useState(false);
@@ -186,25 +190,30 @@ export default function SubscriptionsTab() {
 
   const activePlan = isUpgraded ? upgradePlan : currentPlan;
 
+  // Derive billing values after all state declarations
+  const nextBilling = getNextBillingDate();
+  const diffMs = nextBilling.getTime() - now.getTime();
+  const countdown = getCountdown(diffMs);
+  const isOverdue = diffMs < 0;
+  const totalDue = subStatus?.totalDue || PLAN_PRICES[isUpgraded ? "VPS M" : "VPS S"];
+  const paidThisPeriod = subStatus?.paidThisPeriod || 0;
+  const isPaid = subStatus?.status === "paid";
+  const isPartiallyPaid = !isPaid && paidThisPeriod > 0;
+  const isMissed = isOverdue && !isPaid && paidThisPeriod === 0;
+
   async function handleUpgrade() {
     setUpgrading(true);
     await new Promise((r) => setTimeout(r, 2500));
     setIsUpgraded(true);
     setUpgrading(false);
-    setPaidThisMonth(false); // reset billing for new price
+    // Reload subscription status to reflect plan change
+    getSubscriptionStatus().then(setSubStatus).catch(() => {});
     window.dispatchEvent(new CustomEvent("show-toast", {
       detail: { title: "Upgrade Successful", message: `Plan upgraded to ${upgradePlan.name} · ${upgradePlan.priceKES}/mo`, type: "success", duration: 4000 },
     }));
   }
 
-  // Check if already paid this period
-  useEffect(() => {
-    // Reset paid status on the 11th of each month (after billing date)
-    const day = new Date().getDate();
-    if (day >= 11) {
-      setPaidThisMonth(false);
-    }
-  }, []);
+  // ════ Upgrade Toggle ════
 
   // Load Paystack SDK on mount
   useEffect(() => {
@@ -232,8 +241,24 @@ export default function SubscriptionsTab() {
       }));
 
       setTimeout(() => {
-        setPaidThisMonth(true);
-        setPaymentStatus("paid");
+        // Save simulation payment to Firestore
+        const billingPeriod = getCurrentBillingPeriod();
+        recordPayment({
+          reference: `sim_${Date.now()}`,
+          amount: planConfig.amountKES,
+          plan: planKey as "VPS S" | "VPS M",
+          status: "paid",
+          paidAt: Timestamp.now(),
+          billingPeriod,
+          email: "admin@mountainofdeliverance.org",
+          channel: "simulation",
+          church_id: process.env.NEXT_PUBLIC_CHURCH_ID || "mountain_of_deliverance",
+        }).then(() => {
+          getSubscriptionStatus().then(setSubStatus);
+        }).catch((err) => {
+          console.error("[Pay] Failed to save simulation payment:", err);
+        });
+
         setPaying(false);
         setNow(new Date());
         console.log("[Pay] Simulation payment completed");
@@ -306,8 +331,25 @@ export default function SubscriptionsTab() {
             .then((verifyData: any) => {
               console.log("[Pay] Verify response:", verifyData);
               if (verifyData.verified) {
-                setPaidThisMonth(true);
-                setPaymentStatus("paid");
+                // Save payment record to Firestore
+                const billingPeriod = getCurrentBillingPeriod();
+                recordPayment({
+                  reference: verifyData.reference || response.reference,
+                  amount: verifyData.amount || planConfig.amountKES,
+                  plan: planKey as "VPS S" | "VPS M",
+                  status: "paid",
+                  paidAt: Timestamp.now(),
+                  billingPeriod,
+                  email: "admin@mountainofdeliverance.org",
+                  channel: verifyData.channel || "card",
+                  church_id: process.env.NEXT_PUBLIC_CHURCH_ID || "mountain_of_deliverance",
+                }).then(() => {
+                  // Reload subscription status to reflect the new payment
+                  getSubscriptionStatus().then(setSubStatus);
+                }).catch((err) => {
+                  console.error("[Pay] Failed to save payment record:", err);
+                });
+
                 setNow(new Date());
                 window.dispatchEvent(new CustomEvent("show-toast", {
                   detail: { title: "Payment Successful", message: `${planConfig.label} paid via Paystack · ${planKey} active`, type: "success", duration: 5000 },
@@ -774,10 +816,10 @@ export default function SubscriptionsTab() {
 
       <div className="sub-scroll">
 
-        {/* ════ Billing & Countdown ════ */}
+        {/* ════ Billing & Countdown (Firestore-backed) ════ */}
         <div className="billing-card" style={{
-          background: `linear-gradient(135deg, ${paidThisMonth ? "rgba(74,222,128,0.08)" : "rgba(232,168,56,0.08)"} 0%, var(--surface-card) 100%)`,
-          border: `1px solid ${paidThisMonth ? "rgba(74,222,128,0.2)" : "rgba(232,168,56,0.2)"}`,
+          background: `linear-gradient(135deg, ${isPaid ? "rgba(74,222,128,0.08)" : isMissed ? "rgba(239,68,68,0.08)" : "rgba(232,168,56,0.08)"} 0%, var(--surface-card) 100%)`,
+          border: `1px solid ${isPaid ? "rgba(74,222,128,0.2)" : isMissed ? "rgba(239,68,68,0.2)" : "rgba(232,168,56,0.2)"}`,
           borderRadius: "var(--radius-lg)",
           padding: "20px",
           marginBottom: 20,
@@ -788,7 +830,7 @@ export default function SubscriptionsTab() {
           <div style={{
             position: "absolute", top: "-40%", right: "-10%",
             width: 160, height: 160,
-            background: `radial-gradient(circle, ${paidThisMonth ? "rgba(74,222,128,0.08)" : "rgba(232,168,56,0.08)"} 0%, transparent 70%)`,
+            background: `radial-gradient(circle, ${isPaid ? "rgba(74,222,128,0.08)" : isMissed ? "rgba(239,68,68,0.08)" : "rgba(232,168,56,0.08)"} 0%, transparent 70%)`,
             pointerEvents: "none",
           }} />
 
@@ -801,27 +843,70 @@ export default function SubscriptionsTab() {
             <div style={{
               fontSize: 11, fontWeight: 700, padding: "4px 12px",
               borderRadius: 20,
-              background: paidThisMonth ? "rgba(74,222,128,0.12)" : isOverdue ? "rgba(239,68,68,0.12)" : "rgba(232,168,56,0.12)",
-              color: paidThisMonth ? "#4ADE80" : isOverdue ? "#EF4444" : "var(--primary)",
+              background: isPaid ? "rgba(74,222,128,0.12)" : isMissed ? "rgba(239,68,68,0.12)" : isPartiallyPaid ? "rgba(251,191,36,0.12)" : "rgba(232,168,56,0.12)",
+              color: isPaid ? "#4ADE80" : isMissed ? "#EF4444" : isPartiallyPaid ? "#FBBF24" : "var(--primary)",
             }}>
-              {paidThisMonth
-                ? <><i className="fas fa-check-circle"></i> Paid</>
-                : isOverdue
-                  ? <><i className="fas fa-exclamation-circle"></i> Overdue</>
-                  : <><i className="fas fa-clock"></i> Pending</>
-              }
+              {isPaid ? (
+                <><i className="fas fa-check-circle"></i> Paid</>
+              ) : isMissed ? (
+                <><i className="fas fa-exclamation-circle"></i> Missed</>
+              ) : isPartiallyPaid ? (
+                <><i className="fas fa-hourglass-half"></i> Partial</>
+              ) : (
+                <><i className="fas fa-clock"></i> Pending</>
+              )}
             </div>
           </div>
 
           {/* Amount */}
           <div style={{ marginBottom: 16, textAlign: "center" }}>
-            <div style={{ fontSize: 32, fontWeight: 800, color: paidThisMonth ? "#4ADE80" : "var(--primary)", fontVariantNumeric: "tabular-nums" }}>
-              {activePlan.priceKES}
+            <div style={{ fontSize: 32, fontWeight: 800, color: isPaid ? "#4ADE80" : "var(--primary)", fontVariantNumeric: "tabular-nums" }}>
+              KES {totalDue.toLocaleString()}
             </div>
             <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 2 }}>
-              ≈ {activePlan.priceEUR} · {currentMonth}
+              {currentMonthLabel}
             </div>
           </div>
+
+          {/* Balance indicator (if partial payment) */}
+          {isPartiallyPaid && (
+            <div style={{
+              background: "rgba(251,191,36,0.08)",
+              border: "1px solid rgba(251,191,36,0.2)",
+              borderRadius: "var(--radius-sm)",
+              padding: "10px 14px",
+              marginBottom: 12,
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              fontSize: 13,
+            }}>
+              <span style={{ color: "var(--text-secondary)" }}>Paid so far</span>
+              <span style={{ fontWeight: 700, color: "#FBBF24" }}>KES {paidThisPeriod.toLocaleString()}</span>
+              <span style={{ color: "var(--text-secondary)" }}>Balance</span>
+              <span style={{ fontWeight: 700, color: "var(--primary)" }}>KES {balance.toLocaleString()}</span>
+            </div>
+          )}
+
+          {/* Missed payment alert */}
+          {isMissed && (
+            <div style={{
+              background: "rgba(239,68,68,0.08)",
+              border: "1px solid rgba(239,68,68,0.2)",
+              borderRadius: "var(--radius-sm)",
+              padding: "10px 14px",
+              marginBottom: 12,
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              fontSize: 13,
+              color: "var(--error)",
+              fontWeight: 600,
+            }}>
+              <i className="fas fa-exclamation-triangle"></i>
+              Payment missed — due on the 10th
+            </div>
+          )}
 
           {/* Countdown */}
           <div style={{
@@ -832,7 +917,7 @@ export default function SubscriptionsTab() {
             textAlign: "center",
           }}>
             <div style={{ fontSize: 11, color: "var(--text-tertiary)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 8 }}>
-              {paidThisMonth ? "Next billing in" : isOverdue ? "Overdue by" : "Due in"}
+              {isPaid ? "Next billing in" : isMissed ? "Overdue by" : "Due in"}
             </div>
             <div style={{ display: "flex", justifyContent: "center", gap: 12 }}>
               {[
@@ -844,7 +929,7 @@ export default function SubscriptionsTab() {
                 <div key={unit.label} style={{ textAlign: "center" }}>
                   <div style={{
                     fontSize: 22, fontWeight: 800,
-                    color: paidThisMonth ? "#4ADE80" : "var(--primary)",
+                    color: isPaid ? "#4ADE80" : "var(--primary)",
                     fontVariantNumeric: "tabular-nums",
                     lineHeight: 1.1,
                   }}>
@@ -870,7 +955,7 @@ export default function SubscriptionsTab() {
           {/* Pay Now button */}
           <button
             onClick={handlePayNow}
-            disabled={paying || paidThisMonth}
+            disabled={paying || isPaid}
             style={{
               width: "100%",
               padding: "16px",
@@ -878,36 +963,38 @@ export default function SubscriptionsTab() {
               borderRadius: "var(--radius-md)",
               fontSize: 16,
               fontWeight: 700,
-              cursor: (paying || paidThisMonth) ? "not-allowed" : "pointer",
+              cursor: (paying || isPaid) ? "not-allowed" : "pointer",
               transition: "all 0.2s",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
               gap: 8,
-              background: paidThisMonth
+              background: isPaid
                 ? "var(--surface-elevated)"
                 : "linear-gradient(135deg, var(--gradient-start), var(--gradient-end))",
-              color: paidThisMonth ? "var(--text-tertiary)" : "#fff",
-              opacity: (paying || paidThisMonth) ? 0.7 : 1,
+              color: isPaid ? "var(--text-tertiary)" : "#fff",
+              opacity: (paying || isPaid) ? 0.7 : 1,
             }}
           >
             {paying ? (
               <><i className="fas fa-spinner fa-spin"></i> Processing…</>
-            ) : paidThisMonth ? (
-              <><i className="fas fa-check-circle"></i> Paid for {currentMonth}</>
+            ) : isPaid ? (
+              <><i className="fas fa-check-circle"></i> Paid for {currentMonthLabel}</>
+            ) : isPartiallyPaid ? (
+              <><i className="fas fa-lock"></i> Pay Balance — KES {balance.toLocaleString()}</>
             ) : (
-              <>              <i className="fas fa-lock"></i> Pay Now — {activePlan.priceKES}</>
+              <>              <i className="fas fa-lock"></i> Pay Now — KES {totalDue.toLocaleString()}</>
             )}
           </button>
 
-          {/* Payment history hint */}
-          {!paidThisMonth && !paying && (
+          {/* Payment secured note */}
+          {!isPaid && !paying && (
             <div style={{
               fontSize: 11, color: "var(--text-tertiary)",
               marginTop: 12, textAlign: "center",
             }}>
               <i className="fas fa-shield-halved" style={{ marginRight: 4, fontSize: 10 }}></i>
-              Secured via encrypted payment gateway
+              Secured via Paystack · Test mode active
             </div>
           )}
         </div>
