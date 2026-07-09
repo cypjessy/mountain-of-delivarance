@@ -1,6 +1,12 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
+import { apiFetch } from "@/lib/api";
+import {
+  PAYSTACK_PUBLIC_KEY,
+  loadPaystackSDK,
+  PAYSTACK_PLANS,
+} from "@/lib/paystack";
 
 // ═══════════════════════════════════════════════
 // Types
@@ -200,18 +206,105 @@ export default function SubscriptionsTab() {
     }
   }, []);
 
+  // Load Paystack SDK on mount
+  useEffect(() => {
+    loadPaystackSDK().catch(() => {});
+  }, []);
+
   async function handlePayNow() {
+    if (!PAYSTACK_PUBLIC_KEY) {
+      window.dispatchEvent(new CustomEvent("show-toast", {
+        detail: { title: "Paystack Not Configured", message: "Set NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY in environment variables", type: "error", duration: 5000 },
+      }));
+      return;
+    }
+
     setPaying(true);
-    // Simulate payment processing with realistic animation
-    await new Promise((r) => setTimeout(r, 2000));
-    setPaidThisMonth(true);
-    setPaymentStatus("paid");
-    setPaying(false);
-    window.dispatchEvent(new CustomEvent("show-toast", {
-      detail: { title: "Payment Successful", message: `${activePlan.priceKES} paid · ${activePlan.name} subscription active until next billing`, type: "success", duration: 4000 },
-    }));
-    // Re-fetch countdown resets
-    setNow(new Date());
+    try {
+      // Ensure SDK is loaded
+      await loadPaystackSDK();
+
+      // Get the user's email from a prompt (or from auth context if available)
+      const email = window.prompt("Enter your email for payment receipt:") || "admin@mountainofdeliverance.org";
+
+      // Initialize transaction on the server
+      const planKey = isUpgraded ? "VPS M" : "VPS S";
+      const res = await apiFetch("/api/paystack/initialize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, plan: planKey }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to initialize payment");
+      }
+
+      const { access_code, reference } = await res.json();
+
+      // Open Paystack popup
+      const planConfig = PAYSTACK_PLANS[planKey];
+
+      // Open the Paystack checkout
+      const handler = (window as any).PaystackPop?.setup({
+        key: PAYSTACK_PUBLIC_KEY,
+        email,
+        amount: planConfig.amountKES * 100, // kobo
+        currency: "KES",
+        ref: reference,
+        metadata: {
+          plan: planKey,
+          church_id: process.env.NEXT_PUBLIC_CHURCH_ID || "mountain_of_deliverance",
+        },
+        callback: async (response: { reference: string; trans: string }) => {
+          // Verify transaction on the server
+          setPaying(true);
+          try {
+            const verifyRes = await apiFetch("/api/paystack/verify", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ reference: response.reference }),
+            });
+
+            const verifyData = await verifyRes.json();
+
+            if (verifyData.verified) {
+              setPaidThisMonth(true);
+              setPaymentStatus("paid");
+              setNow(new Date());
+              window.dispatchEvent(new CustomEvent("show-toast", {
+                detail: { title: "Payment Successful", message: `${activePlan.priceKES} paid via Paystack · ${activePlan.name} active until next billing`, type: "success", duration: 5000 },
+              }));
+            } else {
+              throw new Error("Payment verification failed");
+            }
+          } catch (err: any) {
+            window.dispatchEvent(new CustomEvent("show-toast", {
+              detail: { title: "Verification Error", message: err.message || "Could not verify payment", type: "error", duration: 4000 },
+            }));
+          } finally {
+            setPaying(false);
+          }
+        },
+        onClose: () => {
+          setPaying(false);
+          window.dispatchEvent(new CustomEvent("show-toast", {
+            detail: { title: "Payment Cancelled", message: "You closed the payment window", type: "info", duration: 3000 },
+          }));
+        },
+      });
+
+      if (handler) {
+        handler.openIframe();
+      } else {
+        throw new Error("Paystack SDK not loaded");
+      }
+    } catch (err: any) {
+      setPaying(false);
+      window.dispatchEvent(new CustomEvent("show-toast", {
+        detail: { title: "Payment Error", message: err.message || "Something went wrong", type: "error", duration: 4000 },
+      }));
+    }
   }
 
   // Simulate random events
