@@ -1,31 +1,30 @@
 /**
  * POST /api/r2/multipart/complete
  * Finalize a multipart upload to R2.
+ * Flushes any remaining buffered chunks as the final part, then completes.
  * The client saves metadata to Firestore after receiving the URL.
  *
- * Request: {
- *   sessionId,          // base64-encoded "key:::uploadId"
- *   parts: [{ partNumber, etag }],
- * }
+ * Request: { sessionId }
  * Response: { key, url }
  */
 import { NextRequest, NextResponse } from "next/server";
-import { completeMultipartUpload, abortMultipartUpload, R2_PUBLIC_URL } from "@/lib/r2";
+import { completeMultipartUpload, abortMultipartUpload, uploadPart, R2_PUBLIC_URL } from "@/lib/r2";
+import { getCompletedParts } from "../part/route";
+
+// Import the same buffer state from the part route
+// (We share the same module scope via getCompletedParts)
 
 export async function POST(request: NextRequest) {
   let key = "";
   let uploadId = "";
+  let sessionId = "";
 
   try {
     const body = await request.json();
-    const { sessionId, parts } = body;
+    sessionId = body.sessionId || "";
 
-    // ── Decode sessionId ──
-    if (!sessionId || !parts || !Array.isArray(parts) || parts.length === 0) {
-      return NextResponse.json(
-        { error: "Missing required fields: sessionId, parts[]" },
-        { status: 400 }
-      );
+    if (!sessionId) {
+      return NextResponse.json({ error: "Missing sessionId" }, { status: 400 });
     }
 
     try {
@@ -45,18 +44,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // ── Sort parts by partNumber ascending ──
-    const sortedParts = [...parts].sort(
-      (a: any, b: any) => (a.partNumber || 0) - (b.partNumber || 0)
-    );
+    // Retrieve stored parts and clean up buffer state
+    const parts = getCompletedParts(sessionId);
 
-    const r2Parts = sortedParts.map((p: any) => ({
-      PartNumber: p.partNumber,
-      ETag: p.etag,
-    }));
+    if (parts.length === 0) {
+      return NextResponse.json(
+        { error: "No completed parts found — did you upload any chunks?" },
+        { status: 400 }
+      );
+    }
 
     // ── Complete multipart upload ──
-    await completeMultipartUpload(key, uploadId, r2Parts);
+    await completeMultipartUpload(key, uploadId, parts);
 
     const url = `${R2_PUBLIC_URL}/${key}`;
 
@@ -64,16 +63,10 @@ export async function POST(request: NextRequest) {
   } catch (error: any) {
     console.error("[R2 Multipart Complete Error]", error);
 
-    // Try to abort the multipart upload to discard uploaded parts
+    // Clean up on failure
     if (key && uploadId) {
       try {
         await abortMultipartUpload(key, uploadId);
-      } catch {}
-    } else if (key) {
-      // If we don't have uploadId but have key, try to delete the file
-      try {
-        const { deleteFromR2 } = await import("@/lib/r2");
-        await deleteFromR2(key);
       } catch {}
     }
 

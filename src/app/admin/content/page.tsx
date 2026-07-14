@@ -793,86 +793,137 @@ export default function AdminContentPage() {
     setR2Uploading(true);
     setR2UploadProgress(0);
 
-    // Chunk size: 3MB — well under Vercel's 4.5MB body limit
-    const CHUNK_SIZE = 3 * 1024 * 1024;
-    const totalChunks = Math.ceil(r2SelectedFile.size / CHUNK_SIZE);
-    const uploadedParts: { partNumber: number; etag: string }[] = [];
+    // Deduplicate state reads at the top so toasts reference consistent values
+    const file = r2SelectedFile;
+    const title = r2VideoTitle.trim();
+    const description = r2VideoDesc.trim();
+    const category = r2VideoCategory;
+    const duration = r2VideoDuration;
+
+    // For files ≤100MB, use direct presigned URL upload (single PUT, no multipart)
+    // For larger files, use chunked multipart via server proxy
+    const MULTIPART_THRESHOLD = 100 * 1024 * 1024; // 100MB
 
     try {
-      // Step 1: Initiate multipart upload
-      const startRes = await fetch("/api/r2/multipart/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fileName: r2SelectedFile.name,
-          contentType: r2SelectedFile.type || "video/mp4",
-        }),
-      });
-      if (!startRes.ok) {
-        const err = await startRes.json();
-        throw new Error(err.error || "Failed to start upload");
-      }
-      const { sessionId } = await startRes.json();
+      let key: string;
+      let url: string;
 
-      // Step 2: Upload each chunk through the server proxy
-      for (let partNumber = 1; partNumber <= totalChunks; partNumber++) {
-        const start = (partNumber - 1) * CHUNK_SIZE;
-        const end = Math.min(start + CHUNK_SIZE, r2SelectedFile.size);
-        const chunk = r2SelectedFile.slice(start, end);
-
-        const formData = new FormData();
-        formData.append("sessionId", sessionId);
-        formData.append("partNumber", String(partNumber));
-        formData.append("file", chunk, `part-${partNumber}`);
-
-        const partRes = await fetch("/api/r2/multipart/part", {
+      if (file.size <= MULTIPART_THRESHOLD) {
+        // ── Small file: presigned URL (direct browser-to-R2 single PUT) ──
+        const presignRes = await fetch("/api/r2/presign", {
           method: "POST",
-          body: formData,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fileName: file.name,
+            contentType: file.type || "video/mp4",
+          }),
         });
 
-        if (!partRes.ok) {
-          const err = await partRes.json();
-          throw new Error(err.error || `Part ${partNumber} failed`);
+        if (!presignRes.ok) {
+          const err = await presignRes.json();
+          throw new Error(err.error || "Failed to get upload URL");
         }
 
-        const { etag } = await partRes.json();
-        uploadedParts.push({ partNumber, etag });
+        const presignData = await presignRes.json();
+        key = presignData.key;
+        url = presignData.publicUrl;
 
-        // Update progress based on chunks completed
-        const pct = Math.round((partNumber / totalChunks) * 90);
-        setR2UploadProgress(pct);
+        // Upload directly to R2 via XHR (no CORS issues since user has configured CORS rules)
+        await new Promise<void>((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open("PUT", presignData.presignedUrl, true);
+          xhr.setRequestHeader("Content-Type", file.type || "video/mp4");
+          xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) {
+              const pct = Math.round((e.loaded / e.total) * 90);
+              setR2UploadProgress(Math.min(pct, 90));
+            }
+          };
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) resolve();
+            else reject(new Error(`Upload failed (${xhr.status})`));
+          };
+          xhr.onerror = () => reject(new Error("Network error during upload"));
+          xhr.send(file);
+        });
+      } else {
+        // ── Large file: chunked multipart via server proxy ──
+        // Start multipart
+        const startRes = await fetch("/api/r2/multipart/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fileName: file.name,
+            contentType: file.type || "video/mp4",
+          }),
+        });
+        if (!startRes.ok) {
+          const err = await startRes.json();
+          throw new Error(err.error || "Failed to start multipart upload");
+        }
+        const { sessionId } = await startRes.json();
+
+        // Send 3MB chunks through server proxy (server buffers to 5.5MB+ parts)
+        const CHUNK_SIZE = 3 * 1024 * 1024;
+        const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+
+        for (let i = 0; i < totalChunks; i++) {
+          const start = i * CHUNK_SIZE;
+          const end = Math.min(start + CHUNK_SIZE, file.size);
+          const chunk = file.slice(start, end);
+          const isLast = i === totalChunks - 1;
+
+          const formData = new FormData();
+          formData.append("sessionId", sessionId);
+          formData.append("isLast", String(isLast));
+          formData.append("file", chunk, `chunk-${i}`);
+
+          const partRes = await fetch("/api/r2/multipart/part", {
+            method: "POST",
+            body: formData,
+          });
+
+          if (!partRes.ok) {
+            const err = await partRes.json();
+            throw new Error(err.error || `Chunk ${i + 1} failed`);
+          }
+
+          // Update progress based on chunks sent
+          const pct = Math.round(((i + 1) / totalChunks) * 85);
+          setR2UploadProgress(pct);
+        }
+
+        // Complete the multipart upload
+        const completeRes = await fetch("/api/r2/multipart/complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId }),
+        });
+
+        if (!completeRes.ok) {
+          const err = await completeRes.json();
+          throw new Error(err.error || "Failed to finalize upload");
+        }
+
+        const completeData = await completeRes.json();
+        key = completeData.key;
+        url = completeData.url;
       }
 
-      // Step 3: Complete the multipart upload (R2 side)
-      const completeRes = await fetch("/api/r2/multipart/complete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionId,
-          parts: uploadedParts,
-        }),
-      });
-
-      if (!completeRes.ok) {
-        const err = await completeRes.json();
-        throw new Error(err.error || "Failed to finalize upload");
-      }
-
-      const { key, url } = await completeRes.json();
       setR2UploadProgress(100);
 
-      // Step 4: Save video metadata to Firestore
+      // Save video metadata to Firestore
       await addR2Video({
-        title: r2VideoTitle.trim(),
-        description: r2VideoDesc.trim(),
+        title,
+        description,
         url,
         key,
-        fileSize: r2SelectedFile.size,
-        contentType: r2SelectedFile.type || "video/mp4",
-        originalName: r2SelectedFile.name,
-        duration: r2VideoDuration,
+        fileSize: file.size,
+        contentType: file.type || "video/mp4",
+        originalName: file.name,
+        duration,
         thumbnail: "",
-        category: r2VideoCategory,
+        category,
         isFeatured: false,
         isHidden: false,
       });
@@ -888,7 +939,7 @@ export default function AdminContentPage() {
       setR2UploadProgress(0);
 
       window.dispatchEvent(new CustomEvent("show-toast", {
-        detail: { title: "Upload Complete", message: `"${r2VideoTitle.trim()}" uploaded successfully`, type: "success", duration: 3000 },
+        detail: { title: "Upload Complete", message: `"${title}" uploaded successfully`, type: "success", duration: 3000 },
       }));
       await import("@/lib/haptics").then((m) => m.hapticSuccess());
     } catch (err: any) {
@@ -898,7 +949,6 @@ export default function AdminContentPage() {
     }
     setR2Uploading(false);
   }
-
   function openEditR2Video(video: R2Video) {
     setEditR2Video(video);
     setEditR2Title(video.title);

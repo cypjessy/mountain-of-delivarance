@@ -1,69 +1,104 @@
 /**
  * POST /api/r2/multipart/part
- * Upload a single chunk (part) of a multipart upload to R2.
- * Parts are numbered sequentially starting at 1.
+ * Accept a single chunk from the client (≤3MB, safe for Vercel's body limit).
+ * Server buffers chunks until ≥MIN_PART_SIZE, then flushes to R2 as a single part.
  *
  * Request: multipart/form-data
  *   - sessionId: string (base64-encoded "key:::uploadId")
- *   - partNumber: number
- *   - file: File (the chunk binary)
+ *   - isLast: "true" if this is the final chunk
+ *   - file: File (the chunk binary, up to ~3MB)
  *
- * Response: { partNumber: number, etag: string }
+ * Response: { partNumber: number, etag: string } | { buffered: true }
+ *   - If etag is returned: the chunk was flushed as an R2 part (client tracks it)
+ *   - If buffered: chunk is held in server memory, send more chunks
  */
 import { NextRequest, NextResponse } from "next/server";
 import { uploadPart } from "@/lib/r2";
 
+// ─── Module-level buffer state ─────────────────────────────────
+// Shared across requests in the same serverless instance.
+// On cold start: state is empty (user retries the upload).
+// Key: sessionId   Value: accumulated buffer & metadata
+const buffers = new Map<string, Buffer[]>();
+const bufferSizes = new Map<string, number>();
+// Key: sessionId   Value: completed parts list
+const completedParts = new Map<string, { PartNumber: number; ETag: string }[]>();
+const nextPartNums = new Map<string, number>();
+
+const MIN_PART_SIZE = 5.5 * 1024 * 1024; // 5.5MB (safely above R2's 5MB minimum)
+
+function decodeSessionId(sessionIdB64: string): { key: string; uploadId: string } | null {
+  try {
+    const decoded = Buffer.from(sessionIdB64, "base64").toString("utf-8");
+    const sepIndex = decoded.indexOf(":::");
+    if (sepIndex === -1) return null;
+    return {
+      key: decoded.slice(0, sepIndex),
+      uploadId: decoded.slice(sepIndex + 3),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
-    const sessionIdB64 = formData.get("sessionId") as string | null;
-    const partNumberRaw = formData.get("partNumber") as string | null;
+    const sessionId = formData.get("sessionId") as string | null;
+    const isLast = formData.get("isLast") === "true";
     const file = formData.get("file") as File | null;
 
-    if (!sessionIdB64 || !partNumberRaw || !file) {
+    if (!sessionId || !file) {
       return NextResponse.json(
-        { error: "Missing required fields: sessionId, partNumber, file" },
+        { error: "Missing required fields: sessionId, file" },
         { status: 400 }
       );
     }
 
-    const partNumber = parseInt(partNumberRaw);
-    if (isNaN(partNumber) || partNumber < 1) {
-      return NextResponse.json(
-        { error: "partNumber must be a positive integer" },
-        { status: 400 }
-      );
+    const decoded = decodeSessionId(sessionId);
+    if (!decoded || !decoded.key || !decoded.uploadId) {
+      return NextResponse.json({ error: "Invalid sessionId" }, { status: 400 });
     }
 
-    let key: string, uploadId: string;
-    try {
-      const decoded = Buffer.from(sessionIdB64, "base64").toString("utf-8");
-      const sepIndex = decoded.indexOf(":::");
-      if (sepIndex === -1) throw new Error("Invalid sessionId format");
-      key = decoded.slice(0, sepIndex);
-      uploadId = decoded.slice(sepIndex + 3);
-    } catch {
-      return NextResponse.json(
-        { error: "Invalid sessionId" },
-        { status: 400 }
-      );
-    }
-
-    if (!key || !uploadId) {
-      return NextResponse.json(
-        { error: "Invalid sessionId — missing key or uploadId" },
-        { status: 400 }
-      );
-    }
+    const { key, uploadId } = decoded;
 
     // Read the chunk into a buffer
     const arrayBuffer = await file.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
+    const chunk = Buffer.from(arrayBuffer);
 
-    // Upload this part to R2
-    const etag = await uploadPart(key, uploadId, partNumber, buffer);
+    // ── Buffer management ──
+    const existing = buffers.get(sessionId) || [];
+    const existingSize = bufferSizes.get(sessionId) || 0;
+    existing.push(chunk);
+    const newSize = existingSize + chunk.length;
+    buffers.set(sessionId, existing);
+    bufferSizes.set(sessionId, newSize);
 
-    return NextResponse.json({ partNumber, etag });
+    // If buffer is large enough (≥MIN_PART_SIZE) OR this is the last chunk, flush
+    if (newSize >= MIN_PART_SIZE || isLast) {
+      // Concatenate all buffered chunks
+      const combined = Buffer.concat(existing);
+      // Clear the buffer
+      buffers.delete(sessionId);
+      bufferSizes.delete(sessionId);
+
+      // Get next part number
+      const partNum = (nextPartNums.get(sessionId) || 0) + 1;
+      nextPartNums.set(sessionId, partNum);
+
+      // Upload to R2
+      const etag = await uploadPart(key, uploadId, partNum, combined);
+
+      // Store in completed parts
+      const parts = completedParts.get(sessionId) || [];
+      parts.push({ PartNumber: partNum, ETag: etag });
+      completedParts.set(sessionId, parts);
+
+      return NextResponse.json({ partNumber: partNum, etag, isLast });
+    } else {
+      // Buffer isn't full yet — tell client to keep sending
+      return NextResponse.json({ buffered: true });
+    }
   } catch (error: any) {
     console.error("[R2 Multipart Part Error]", error);
     return NextResponse.json(
@@ -71,4 +106,16 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+/**
+ * Called by the complete endpoint to get stored parts and clean up state.
+ */
+export function getCompletedParts(sessionId: string): { PartNumber: number; ETag: string }[] {
+  const parts = completedParts.get(sessionId) || [];
+  completedParts.delete(sessionId);
+  buffers.delete(sessionId);
+  bufferSizes.delete(sessionId);
+  nextPartNums.delete(sessionId);
+  return parts;
 }
