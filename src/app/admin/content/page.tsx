@@ -792,9 +792,15 @@ export default function AdminContentPage() {
     }
     setR2Uploading(true);
     setR2UploadProgress(0);
+
+    // Chunk size: 3MB — well under Vercel's 4.5MB body limit
+    const CHUNK_SIZE = 3 * 1024 * 1024;
+    const totalChunks = Math.ceil(r2SelectedFile.size / CHUNK_SIZE);
+    const uploadedParts: { partNumber: number; etag: string }[] = [];
+
     try {
-      // Step 1: Get presigned URL from server
-      const presignRes = await fetch("/api/r2/presign", {
+      // Step 1: Initiate multipart upload
+      const startRes = await fetch("/api/r2/multipart/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -802,42 +808,64 @@ export default function AdminContentPage() {
           contentType: r2SelectedFile.type || "video/mp4",
         }),
       });
+      if (!startRes.ok) {
+        const err = await startRes.json();
+        throw new Error(err.error || "Failed to start upload");
+      }
+      const { sessionId } = await startRes.json();
 
-      if (!presignRes.ok) {
-        const err = await presignRes.json();
-        throw new Error(err.error || "Failed to get upload URL");
+      // Step 2: Upload each chunk through the server proxy
+      for (let partNumber = 1; partNumber <= totalChunks; partNumber++) {
+        const start = (partNumber - 1) * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, r2SelectedFile.size);
+        const chunk = r2SelectedFile.slice(start, end);
+
+        const formData = new FormData();
+        formData.append("sessionId", sessionId);
+        formData.append("partNumber", String(partNumber));
+        formData.append("file", chunk, `part-${partNumber}`);
+
+        const partRes = await fetch("/api/r2/multipart/part", {
+          method: "POST",
+          body: formData,
+        });
+
+        if (!partRes.ok) {
+          const err = await partRes.json();
+          throw new Error(err.error || `Part ${partNumber} failed`);
+        }
+
+        const { etag } = await partRes.json();
+        uploadedParts.push({ partNumber, etag });
+
+        // Update progress based on chunks completed
+        const pct = Math.round((partNumber / totalChunks) * 90);
+        setR2UploadProgress(pct);
       }
 
-      const { key, presignedUrl, publicUrl } = await presignRes.json();
-
-      // Step 2: Upload directly to R2 via presigned URL (monitor progress)
-      const xhr = new XMLHttpRequest();
-      xhr.open("PUT", presignedUrl, true);
-      xhr.setRequestHeader("Content-Type", r2SelectedFile.type || "video/mp4");
-
-      const uploadPromise = new Promise<void>((resolve, reject) => {
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) {
-            const pct = Math.round((e.loaded / e.total) * 100);
-            setR2UploadProgress(Math.min(pct, 99));
-          }
-        };
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) resolve();
-          else reject(new Error(`Upload failed (${xhr.status})`));
-        };
-        xhr.onerror = () => reject(new Error("Network error during upload"));
-        xhr.send(r2SelectedFile);
+      // Step 3: Complete the multipart upload (R2 side)
+      const completeRes = await fetch("/api/r2/multipart/complete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId,
+          parts: uploadedParts,
+        }),
       });
 
-      await uploadPromise;
+      if (!completeRes.ok) {
+        const err = await completeRes.json();
+        throw new Error(err.error || "Failed to finalize upload");
+      }
+
+      const { key, url } = await completeRes.json();
       setR2UploadProgress(100);
 
-      // Step 3: Save metadata to Firestore
+      // Step 4: Save video metadata to Firestore
       await addR2Video({
         title: r2VideoTitle.trim(),
         description: r2VideoDesc.trim(),
-        url: publicUrl,
+        url,
         key,
         fileSize: r2SelectedFile.size,
         contentType: r2SelectedFile.type || "video/mp4",
@@ -1062,7 +1090,7 @@ export default function AdminContentPage() {
             >
               <div className="upload-zone-icon"><i className="fas fa-video"></i></div>
               <div className="upload-zone-title">Tap to select a video file</div>
-              <div className="upload-zone-sub">MP4, WebM, OGG — up to 5GB (direct upload via S3)</div>
+              <div className="upload-zone-sub">MP4, WebM, OGG — up to 5GB (chunked server-side upload)</div>
             </div>
           ) : (
             <div style={{

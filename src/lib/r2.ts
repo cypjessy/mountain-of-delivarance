@@ -8,6 +8,10 @@ import {
   DeleteObjectCommand,
   ListObjectsV2Command,
   HeadObjectCommand,
+  CreateMultipartUploadCommand,
+  UploadPartCommand,
+  CompleteMultipartUploadCommand,
+  AbortMultipartUploadCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
@@ -145,4 +149,86 @@ export async function getR2ObjectHead(key: string): Promise<{
   } catch {
     return null;
   }
+}
+
+/* ─── Multipart Upload (for files up to 5GB) ──────────────── */
+
+export interface MultipartStartResult {
+  key: string;
+  uploadId: string;
+}
+
+/**
+ * Start an S3-compatible multipart upload on R2.
+ * Returns a key and uploadId that must be passed to subsequent part/complete calls.
+ */
+export async function startMultipartUpload(
+  key: string,
+  contentType: string
+): Promise<MultipartStartResult> {
+  const command = new CreateMultipartUploadCommand({
+    Bucket: R2_BUCKET_NAME,
+    Key: key,
+    ContentType: contentType,
+  });
+  const result = await s3Client.send(command);
+  return {
+    key,
+    uploadId: result.UploadId || "",
+  };
+}
+
+/**
+ * Upload a single part of a multipart upload.
+ * @returns the ETag string returned by R2 (required to complete the upload).
+ */
+export async function uploadPart(
+  key: string,
+  uploadId: string,
+  partNumber: number,
+  body: Buffer | Uint8Array
+): Promise<string> {
+  const command = new UploadPartCommand({
+    Bucket: R2_BUCKET_NAME,
+    Key: key,
+    UploadId: uploadId,
+    PartNumber: partNumber,
+    Body: body,
+  });
+  const result = await s3Client.send(command);
+  return result.ETag || "";
+}
+
+/**
+ * Complete a multipart upload, assembling all uploaded parts.
+ * Parts must be sorted by partNumber (ascending).
+ */
+export async function completeMultipartUpload(
+  key: string,
+  uploadId: string,
+  parts: { PartNumber: number; ETag: string }[]
+): Promise<void> {
+  const command = new CompleteMultipartUploadCommand({
+    Bucket: R2_BUCKET_NAME,
+    Key: key,
+    UploadId: uploadId,
+    MultipartUpload: { Parts: parts },
+  });
+  await s3Client.send(command);
+}
+
+/**
+ * Abort a multipart upload, discarding all uploaded parts.
+ * Call this on failure to avoid being charged for stored parts.
+ */
+export async function abortMultipartUpload(
+  key: string,
+  uploadId: string
+): Promise<void> {
+  const command = new AbortMultipartUploadCommand({
+    Bucket: R2_BUCKET_NAME,
+    Key: key,
+    UploadId: uploadId,
+  });
+  await s3Client.send(command);
 }
