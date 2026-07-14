@@ -1151,7 +1151,7 @@ export default function AdminTVPage() {
           })}
         </div>
       )}
-    </AdminTvPlayerProvider>
+    </>
   );
 
   const renderLiveTab = () => (
@@ -1664,7 +1664,7 @@ export default function AdminTVPage() {
           )}
         </>
       )}
-    </AdminTvPlayerProvider>
+    </>
   );
 
   // ─── Render current tab ───
