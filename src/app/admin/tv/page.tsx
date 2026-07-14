@@ -27,7 +27,7 @@ import {
   collection, collectionGroup, doc, query, orderBy, onSnapshot, limit, Timestamp,
 } from "firebase/firestore";
 import AdminBottomNav from "@/components/admin/AdminBottomNav";
-import { useTvPlayer } from "@/lib/tv/TvPlayerProvider";
+import { AdminTvPlayerProvider, useAdminTvPlayer } from "@/lib/tv/AdminTvPlayerProvider";
 import ToastBridge from "@/components/dashboard/ToastBridge";
 import PremiumTopBar from "@/components/shared/PremiumTopBar";
 
@@ -36,8 +36,8 @@ export default function AdminTVPage() {
   const { toggleFullscreen } = useFullscreenToggle();
   const [loading, setLoading] = useState(true);
 
-  // ─── Global TvPlayerProvider (portal-based, survives page navigations) ───
-  const adminTvPlayer = useTvPlayer();
+  // ─── AdminTvPlayerProvider (separate from member TV player) ───
+  const adminTvPlayer = useAdminTvPlayer();
   // Callback ref fires on every mount/remount (handles tab switching correctly)
   const tvPlayerTargetRef = useCallback((el: HTMLDivElement | null) => {
     adminTvPlayer.registerTarget(el);
@@ -84,11 +84,6 @@ export default function AdminTVPage() {
   useEffect(() => {
     isEntryBumperPlayingRef.current = isEntryBumperPlaying;
   }, [isEntryBumperPlaying]);
-
-  // Immediately hide stale player state from previous pages on mount
-  useEffect(() => {
-    adminTvPlayer.hide();
-  }, [adminTvPlayer]);
 
   // Load R2 videos + playlists + admin TV state from Firestore on mount
   useEffect(() => {
@@ -1156,7 +1151,7 @@ export default function AdminTVPage() {
           })}
         </div>
       )}
-    </>
+    </AdminTvPlayerProvider>
   );
 
   const renderLiveTab = () => (
@@ -1669,7 +1664,7 @@ export default function AdminTVPage() {
           )}
         </>
       )}
-    </>
+    </AdminTvPlayerProvider>
   );
 
   // ─── Render current tab ───
@@ -1683,7 +1678,7 @@ export default function AdminTVPage() {
   };
 
   return (
-    <>
+    <AdminTvPlayerProvider>
       <style>{`
         :root {
           --primary: #E8A838; --primary-light: #F5C76B; --bg: #0F0F0F;
@@ -2726,6 +2721,6 @@ export default function AdminTVPage() {
 
         <AdminBottomNav />
       </div>
-    </>
+    </AdminTvPlayerProvider>
   );
 }
