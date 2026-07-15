@@ -5,6 +5,7 @@ import { AudioProvider } from "@/lib/audio/AudioContext";
 import { TvPlayerProvider } from "@/lib/tv/TvPlayerProvider";
 import { BackButtonHandler } from "@/components/shared/BackButtonHandler";
 import { RootErrorBoundary } from "@/components/shared/RootErrorBoundary";
+import UpdateChecker from "@/components/shared/UpdateChecker";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -58,6 +59,7 @@ export default function RootLayout({
             <TvPlayerProvider>
               <ToastProvider>
                 <RootErrorBoundary>{children}</RootErrorBoundary>
+                <UpdateChecker />
               </ToastProvider>
               <BackButtonHandler />
             </TvPlayerProvider>

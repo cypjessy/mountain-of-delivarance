@@ -19,19 +19,30 @@ export interface BumperConfig {
   r2VideoTitle: string;
 }
 
+interface ResumeState {
+  mode: 'youtube' | 'r2';
+  videoId?: string;
+  r2Url?: string;
+  seek: number;
+}
+
 interface TvPlayerContextValue {
   /** Register a DOM element for the player to render into (via portal). */
   registerTarget: (el: HTMLElement | null) => void;
   /** Start/resume playing a YouTube video. */
   play: (videoId: string, seek?: number) => void;
+  /** Start/resume playing an R2 (HTML5) video by URL. */
+  playR2: (sourceUrl: string, seek?: number) => void;
   /** Hide the player. */
   hide: () => void;
   /** Update callbacks (onEnded, onTimeUpdate) without calling play again. */
   setCallbacks: (cbs: TvPlayerCallbacks) => void;
   /** Whether the player is currently shown. */
   visible: boolean;
-  /** The current YouTube video ID. */
+  /** The current YouTube video ID (null if playing R2 video). */
   currentVideoId: string | null;
+  /** The current R2 video URL (null if playing YouTube). */
+  currentR2Url: string | null;
   /** Current live stream status (auto-detected from Firestore). */
   liveStatus: LiveStatus | null;
   /** True when a live stream is active. */
@@ -43,7 +54,6 @@ interface TvPlayerContextValue {
   isBumperPlaying: boolean;
   /** Manually trigger the bumper (interrupts current video). */
   triggerBumper: () => void;
-
 }
 
 const TvPlayerContext = createContext<TvPlayerContextValue | null>(null);
@@ -58,6 +68,7 @@ export function useTvPlayer() {
 
 export function TvPlayerProvider({ children }: { children: React.ReactNode }) {
   const [videoId, setVideoId] = useState<string | null>(null);
+  const [r2Url, setR2Url] = useState<string | null>(null);
   const [seek, setSeek] = useState<number | undefined>(undefined);
   const [visible, setVisible] = useState(false);
   const callbacksRef = useRef<TvPlayerCallbacks>({});
@@ -66,7 +77,7 @@ export function TvPlayerProvider({ children }: { children: React.ReactNode }) {
   const [bumperConfig, setBumperConfig] = useState<BumperConfig | null>(null);
   const [isBumperPlaying, setIsBumperPlaying] = useState(false);
   // When bumper triggers, we save the video to resume
-  const resumeVideoRef = useRef<{ videoId: string; seek: number } | null>(null);
+  const resumeVideoRef = useRef<ResumeState | null>(null);
   // Track cumulative playback time for 15-min bumper interrupt
   const playbackSecondsRef = useRef(0);
   const lastTimeUpdateRef = useRef(0);
@@ -109,9 +120,11 @@ export function TvPlayerProvider({ children }: { children: React.ReactNode }) {
   const portalTargetRef = useRef<HTMLElement | null>(null);
   const [portalReady, setPortalReady] = useState(false);
 
-  // Synced ref so registerTarget can read videoId without depending on it
+  // Synced refs for resume state
   const videoIdRef = useRef<string | null>(null);
+  const r2UrlRef = useRef<string | null>(null);
   useEffect(() => { videoIdRef.current = videoId; }, [videoId]);
+  useEffect(() => { r2UrlRef.current = r2Url; }, [r2Url]);
 
   // Guard against re-applying the same seek value
   const lastAppliedSeekRef = useRef<number | undefined>(undefined);
@@ -139,12 +152,36 @@ export function TvPlayerProvider({ children }: { children: React.ReactNode }) {
       setIsBumperPlaying(false);
       resumeVideoRef.current = null;
     }
+    // Clear R2 mode
+    setR2Url(null);
+    r2UrlRef.current = null;
     // Reset playback timer when starting a new video
     playbackSecondsRef.current = 0;
     lastTimeUpdateRef.current = 0;
     setVideoId((prev) => {
       if (prev !== id) setPlayerKey((k) => k + 1);
       return id;
+    });
+    setSeek(seekTime);
+    if (seekTime !== undefined) latestSeekRef.current = seekTime;
+    setVisible(true);
+  }, [isBumperPlaying]);
+
+  const playR2 = useCallback((sourceUrl: string, seekTime?: number) => {
+    // Exit bumper mode if active
+    if (isBumperPlaying) {
+      setIsBumperPlaying(false);
+      resumeVideoRef.current = null;
+    }
+    // Clear YouTube mode
+    setVideoId(null);
+    videoIdRef.current = null;
+    // Reset playback timer
+    playbackSecondsRef.current = 0;
+    lastTimeUpdateRef.current = 0;
+    setR2Url((prev) => {
+      if (prev !== sourceUrl) setPlayerKey((k) => k + 1);
+      return sourceUrl;
     });
     setSeek(seekTime);
     if (seekTime !== undefined) latestSeekRef.current = seekTime;
@@ -166,19 +203,27 @@ export function TvPlayerProvider({ children }: { children: React.ReactNode }) {
   // ─── Bumper trigger ───
   const triggerBumper = useCallback(() => {
     if (!bumperConfig) return;
-    if (isBumperPlaying) return; // prevent double-trigger
-    // Save current video state before switching to bumper
+    if (isBumperPlaying) return;
+    // Save current state before switching to bumper
+    const currentSeek = latestSeekRef.current;
+    if (typeof currentSeek !== "number") return;
     const currentId = videoIdRef.current;
-    if (currentId && typeof latestSeekRef.current === "number") {
+    const currentR2 = r2UrlRef.current;
+    if (currentId) {
       resumeVideoRef.current = {
+        mode: 'youtube',
         videoId: currentId,
-        seek: latestSeekRef.current,
+        seek: currentSeek,
+      };
+    } else if (currentR2) {
+      resumeVideoRef.current = {
+        mode: 'r2',
+        r2Url: currentR2,
+        seek: currentSeek,
       };
     }
-    // Reset playback timer for 15-min counter
     playbackSecondsRef.current = 0;
     lastTimeUpdateRef.current = 0;
-    // Switch to bumper mode (triggers re-render with HTML5 provider)
     setIsBumperPlaying(true);
   }, [bumperConfig, isBumperPlaying]);
 
@@ -187,11 +232,16 @@ export function TvPlayerProvider({ children }: { children: React.ReactNode }) {
     setIsBumperPlaying(false);
     const resume = resumeVideoRef.current;
     resumeVideoRef.current = null;
-    if (resume) {
-      setVideoId(resume.videoId);
-      setPlayerKey((k) => k + 1);
-      setSeek(resume.seek);
-      latestSeekRef.current = resume.seek;
+    if (!resume) return;
+    setPlayerKey((k) => k + 1);
+    setSeek(resume.seek);
+    latestSeekRef.current = resume.seek;
+    if (resume.mode === 'youtube') {
+      setR2Url(null);
+      setVideoId(resume.videoId || null);
+    } else {
+      setVideoId(null);
+      setR2Url(resume.r2Url || null);
     }
   }, []);
 
@@ -211,13 +261,16 @@ export function TvPlayerProvider({ children }: { children: React.ReactNode }) {
 
   // Stable context value
   const ctxValue = useMemo<TvPlayerContextValue>(() => ({
-    registerTarget, play, hide, setCallbacks, visible, currentVideoId: videoId,
+    registerTarget, play, playR2, hide, setCallbacks, visible,
+    currentVideoId: videoId,
+    currentR2Url: r2Url,
     liveStatus,
     isLive: liveStatus?.isLive ?? false,
     bumperConfig,
     isBumperPlaying,
     triggerBumper,
-  }), [registerTarget, play, hide, setCallbacks, visible, videoId, liveStatus,
+  }), [registerTarget, play, playR2, hide, setCallbacks, visible,
+      videoId, r2Url, liveStatus,
       bumperConfig, isBumperPlaying, triggerBumper]);
 
   const currentPortalTarget = portalTargetRef.current;
@@ -242,25 +295,44 @@ export function TvPlayerProvider({ children }: { children: React.ReactNode }) {
               onEnded={handleBumperEnded}
               onTimeUpdate={() => {}}
             />
-          ) : videoId ? (
+          ) : r2Url ? (
             <PlyrPlayer
-              videoId={videoId}
+              sourceUrl={r2Url}
+              provider="html5"
               initialSeek={seek}
               onEnded={() => {
-                // Reset playback timer on video end
                 playbackSecondsRef.current = 0;
                 lastTimeUpdateRef.current = 0;
                 callbacksRef.current.onEnded?.();
               }}
               onTimeUpdate={(t) => {
                 latestSeekRef.current = t;
-                // Track cumulative playback time for bumper interrupt
                 if (lastTimeUpdateRef.current > 0 && t > lastTimeUpdateRef.current) {
                   const delta = t - lastTimeUpdateRef.current;
                   playbackSecondsRef.current += delta;
-                  // Check if 15 minutes of playback has elapsed
                   if (bumperConfig && playbackSecondsRef.current >= BUMPER_INTERVAL) {
-                    // Trigger bumper on next tick to avoid setState during render
+                    setTimeout(() => triggerBumper(), 0);
+                  }
+                }
+                lastTimeUpdateRef.current = t;
+                callbacksRef.current.onTimeUpdate?.(t);
+              }}
+            />
+          ) : videoId ? (
+            <PlyrPlayer
+              videoId={videoId}
+              initialSeek={seek}
+              onEnded={() => {
+                playbackSecondsRef.current = 0;
+                lastTimeUpdateRef.current = 0;
+                callbacksRef.current.onEnded?.();
+              }}
+              onTimeUpdate={(t) => {
+                latestSeekRef.current = t;
+                if (lastTimeUpdateRef.current > 0 && t > lastTimeUpdateRef.current) {
+                  const delta = t - lastTimeUpdateRef.current;
+                  playbackSecondsRef.current += delta;
+                  if (bumperConfig && playbackSecondsRef.current >= BUMPER_INTERVAL) {
                     setTimeout(() => triggerBumper(), 0);
                   }
                 }

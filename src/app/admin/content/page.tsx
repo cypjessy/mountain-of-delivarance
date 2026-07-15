@@ -22,6 +22,7 @@ import { getAlbums, addAlbum, updateAlbum, deleteAlbum } from "@/lib/albums";
 import type { Album } from "@/lib/albums";
 import { getAlbumEntries, addAlbumEntry, updateAlbumEntry, deleteAlbumEntry } from "@/lib/albumEntries";
 import type { AlbumEntry } from "@/lib/albumEntries";
+import { auth } from "@/lib/firebase";
 import { Timestamp } from "firebase/firestore";
 import PremiumTopBar from "@/components/shared/PremiumTopBar";
 
@@ -879,10 +880,6 @@ export default function AdminContentPage() {
     const category = r2VideoCategory;
     const duration = r2VideoDuration;
 
-    // For files ≤100MB, use direct presigned URL upload (single PUT, no multipart)
-    // For larger files, use chunked multipart via server proxy
-    const MULTIPART_THRESHOLD = 100 * 1024 * 1024; // 100MB
-
     try {
       // ═══ Auto-generate thumbnail ═══
       let thumbnailUrl = "";
@@ -890,9 +887,10 @@ export default function AdminContentPage() {
         const thumbBlob = await captureVideoFrame(file);
         if (thumbBlob && thumbBlob.size > 1000) {
           // Upload thumbnail to R2
+          const thumbToken = await auth.currentUser?.getIdToken();
           const thumbPresignRes = await fetch("/api/r2/presign", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${thumbToken}` },
             body: JSON.stringify({
               fileName: `thumb_${file.name.replace(/\.[^/.]+$/, "")}.jpg`,
               contentType: "image/jpeg",
@@ -922,11 +920,11 @@ export default function AdminContentPage() {
       let key: string;
       let url: string;
 
-      if (file.size <= MULTIPART_THRESHOLD) {
-        // ── Small file: presigned URL (direct browser-to-R2 single PUT) ──
+        // ── Presigned URL upload (direct browser-to-R2 single PUT, works up to 5GB) ──
+        const videoToken = await auth.currentUser?.getIdToken();
         const presignRes = await fetch("/api/r2/presign", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${videoToken}` },
           body: JSON.stringify({
             fileName: file.name,
             contentType: file.type || "video/mp4",
@@ -960,69 +958,6 @@ export default function AdminContentPage() {
           xhr.onerror = () => reject(new Error("Network error during upload"));
           xhr.send(file);
         });
-      } else {
-        // ── Large file: chunked multipart via server proxy ──
-        // Start multipart
-        const startRes = await fetch("/api/r2/multipart/start", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            fileName: file.name,
-            contentType: file.type || "video/mp4",
-          }),
-        });
-        if (!startRes.ok) {
-          const err = await startRes.json();
-          throw new Error(err.error || "Failed to start multipart upload");
-        }
-        const { sessionId } = await startRes.json();
-
-        // Send 3MB chunks through server proxy (server buffers to 5.5MB+ parts)
-        const CHUNK_SIZE = 3 * 1024 * 1024;
-        const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-
-        for (let i = 0; i < totalChunks; i++) {
-          const start = i * CHUNK_SIZE;
-          const end = Math.min(start + CHUNK_SIZE, file.size);
-          const chunk = file.slice(start, end);
-          const isLast = i === totalChunks - 1;
-
-          const formData = new FormData();
-          formData.append("sessionId", sessionId);
-          formData.append("isLast", String(isLast));
-          formData.append("file", chunk, `chunk-${i}`);
-
-          const partRes = await fetch("/api/r2/multipart/part", {
-            method: "POST",
-            body: formData,
-          });
-
-          if (!partRes.ok) {
-            const err = await partRes.json();
-            throw new Error(err.error || `Chunk ${i + 1} failed`);
-          }
-
-          // Update progress based on chunks sent
-          const pct = Math.round(((i + 1) / totalChunks) * 85);
-          setR2UploadProgress(pct);
-        }
-
-        // Complete the multipart upload
-        const completeRes = await fetch("/api/r2/multipart/complete", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId }),
-        });
-
-        if (!completeRes.ok) {
-          const err = await completeRes.json();
-          throw new Error(err.error || "Failed to finalize upload");
-        }
-
-        const completeData = await completeRes.json();
-        key = completeData.key;
-        url = completeData.url;
-      }
 
       setR2UploadProgress(100);
 
@@ -1110,9 +1045,10 @@ export default function AdminContentPage() {
     if (!video) return;
     try {
       // Delete from R2 storage
+      const deleteToken = await auth.currentUser?.getIdToken();
       await fetch("/api/r2/delete", {
         method: "DELETE",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${deleteToken}` },
         body: JSON.stringify({ key: video.key }),
       });
       // Delete metadata from Firestore
@@ -1254,7 +1190,7 @@ export default function AdminContentPage() {
             >
               <div className="upload-zone-icon"><i className="fas fa-video"></i></div>
               <div className="upload-zone-title">Tap to select a video file</div>
-              <div className="upload-zone-sub">MP4, WebM, OGG — up to 5GB (chunked server-side upload)</div>
+              <div className="upload-zone-sub">MP4, WebM, OGG — up to 5GB (presigned URL upload)</div>
             </div>
           ) : (
             <div style={{

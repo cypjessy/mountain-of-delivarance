@@ -1,11 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { signInWithEmailAndPassword, signInWithPopup } from "firebase/auth";
+import { signInWithEmailAndPassword } from "firebase/auth";
 import { doc } from "firebase/firestore";
 import { useRouter } from "next/navigation";
 import { hapticSuccess, hapticError } from "@/lib/haptics";
-import { auth, db, googleProvider, getDocWithRetry } from "@/lib/firebase";
+import { auth, db, getDocWithRetry } from "@/lib/firebase";
 import { useAppStore } from "@/lib/useAppStore";
 import { churchConfig } from "@/lib/churchConfig";
 
@@ -163,49 +163,6 @@ export default function LoginForm() {
     }
   }
 
-  async function handleGoogleSignIn() {
-    setError("");
-    setIsLoading(true);
-    try {
-      const result = await signInWithPopup(auth, googleProvider);
-      const firebaseUser = result.user;
-      setUser(firebaseUser);
-
-      // Try to fetch user doc — if it fails (transient offline), navigate forward anyway
-      let userData: any = null;
-      try {
-        const userDocRef = doc(db, "users", firebaseUser.uid);
-        const userSnap = await getDocWithRetry(userDocRef);
-        if (userSnap.exists()) {
-          userData = userSnap.data() as any;
-          setUserDoc(userData);
-          setChurchConfig(churchConfig);
-        }
-      } catch (docErr) {
-        console.warn("[Login] Google doc fetch failed, navigating forward:", docErr);
-      }
-
-      if (userData) {
-        showToast("Welcome Back!", `Signed in as ${userData.display_name || firebaseUser.displayName}`, "success", 2500);
-        setTimeout(() => {
-          if (userData.role === "admin") router.push("/admin");
-          else router.push("/dashboard");
-        }, 500);
-      } else {
-        showToast("Welcome!", "Let's set up your profile", "info");
-        document.getElementById("registerModal")?.classList.add("active");
-        document.body.style.overflow = "hidden";
-      }
-    } catch (err: unknown) {
-      const e = err as { code?: string; message?: string };
-      if (e.code !== "auth/popup-closed-by-user" && e.code !== "auth/cancelled-popup-request") {
-        setError(e.message || "Google sign in failed");
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  }
-
   function handleForgotPassword() {
     document.getElementById("forgotModal")?.classList.add("active");
     document.body.style.overflow = "hidden";
@@ -305,16 +262,6 @@ export default function LoginForm() {
           </button>
         )}
 
-        <div className="divider">
-          <span>or continue with</span>
-        </div>
-
-        <div className="social-login" style={{ justifyContent: "center" }}>
-          <button type="button" className="social-btn google" onClick={handleGoogleSignIn} disabled={isLoading} style={{ maxWidth: 220 }}>
-            <i className="fab fa-google"></i>
-            <span>Continue with Google</span>
-          </button>
-        </div>
       </form>
 
       {/* Footer */}
@@ -327,16 +274,6 @@ export default function LoginForm() {
             document.body.style.overflow = "hidden";
           }}>
             Create Account
-          </a>
-        </p>
-        <p style={{ marginTop: 16, fontSize: 12, color: "var(--text-tertiary)" }}>
-          First time setting up?{" "}
-          <a href="#" onClick={(e) => {
-            e.preventDefault();
-            document.getElementById("tempAdminModal")?.classList.add("active");
-            document.body.style.overflow = "hidden";
-          }}>
-            Register as Admin
           </a>
         </p>
       </div>

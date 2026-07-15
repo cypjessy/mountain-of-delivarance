@@ -200,6 +200,12 @@ service cloud.firestore {
       allow create, update, delete: if isAdmin();
     }
 
+    // App releases (update check — any authenticated user can read)
+    match /app_releases/{releaseId} {
+      allow read: if isAuth();
+      allow create, update, delete: if isAdmin();
+    }
+
     // Radio schedule / now-playing metadata
     match /radio/{docId} {
       allow read: if isAuth();

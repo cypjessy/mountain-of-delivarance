@@ -91,6 +91,8 @@ public class MainActivity extends BridgeActivity {
                 webView.addJavascriptInterface(new PiPBridge(), "AndroidPiP");
                 jsInterfaceAdded = true;
             }
+            // Prevent Android system font size from scaling WebView content
+            webView.getSettings().setTextZoom(100);
             // Ensure media playback doesn't require user gesture after initial play
             webView.getSettings().setMediaPlaybackRequiresUserGesture(false);
         }

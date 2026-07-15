@@ -3,7 +3,8 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { auth } from "@/lib/firebase";
-import { getVideo, saveUserNote, getUserNote, getAllUserNotes, deleteUserNote } from "@/lib/youtube";
+import { getVideo } from "@/lib/youtube";
+import { saveUserNote, getUserNote, getAllUserNotes, deleteUserNote } from "@/lib/notes";
 import type { YouTubeVideo, TvNote } from "@/lib/youtube";
 import PlyrPlayer from "@/components/tv/PlyrPlayer";
 

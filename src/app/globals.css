@@ -1,3 +1,9 @@
+/* ── Prevent Android system font size from scaling the app ── */
+html, body {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 /* All page-level CSS lives inside each page component.
    This file only contains global responsive overrides. */
 

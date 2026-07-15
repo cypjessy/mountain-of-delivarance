@@ -2,15 +2,31 @@
  * POST /api/r2/presign
  * Generate a presigned PUT URL so the client can upload directly to R2.
  * Supports files up to 5GB.
+ * Requires a valid Firebase ID token in the Authorization header.
  *
- * Request:  { fileName: string, contentType: string, folder?: string }
+ * Request:
+ *   Authorization: Bearer <Firebase ID token>
+ *   Body: { fileName: string, contentType: string, folder?: string }
+ *
  * Response: { key: string, presignedUrl: string, publicUrl: string }
  */
 import { NextRequest, NextResponse } from "next/server";
 import { getPresignedUploadUrl, R2_PUBLIC_URL } from "@/lib/r2";
+import { verifyFirebaseToken } from "@/lib/apiAuth";
 
 export async function POST(request: NextRequest) {
   try {
+    // ── Verify Firebase Auth token ──
+    const user = await verifyFirebaseToken(
+      request.headers.get("Authorization")
+    );
+    if (!user) {
+      return NextResponse.json(
+        { error: "Unauthorized — valid Firebase ID token required" },
+        { status: 401 }
+      );
+    }
+
     const { fileName, contentType, folder } = await request.json();
 
     if (!fileName) {
