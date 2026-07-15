@@ -61,6 +61,98 @@ html, body {
   .bottom-nav { max-width: 1200px !important; }
 }
 
+/* ── Mobile font-size reduction (Android cards & tables are too large) ── */
+@media (max-width: 480px) {
+  .section-title {
+    font-size: 15px !important;
+  }
+  .stat-value {
+    font-size: 22px !important;
+  }
+  .stat-label {
+    font-size: 11px !important;
+  }
+  .tv-grid-card-title,
+  .pl-browse-title,
+  .pl-selected-title {
+    font-size: 12px !important;
+  }
+  .tv-grid-card-meta,
+  .pl-browse-meta {
+    font-size: 10px !important;
+  }
+  .form-label {
+    font-size: 12px !important;
+  }
+  .form-hint {
+    font-size: 11px !important;
+  }
+  .tv-prayer-item-text,
+  .tv-chat-msg-text {
+    font-size: 12px !important;
+  }
+  .giving-amount-btn {
+    font-size: 13px !important;
+  }
+  .pm-name {
+    font-size: 14px !important;
+  }
+  .pm-type {
+    font-size: 11px !important;
+  }
+  .tx-member {
+    font-size: 14px !important;
+  }
+  .tx-amount {
+    font-size: 16px !important;
+  }
+  .section-header-inline .section-link {
+    font-size: 11px !important;
+  }
+  .st-time {
+    font-size: 12px !important;
+  }
+  .st-label {
+    font-size: 12px !important;
+  }
+  .rh-track-name {
+    font-size: 15px !important;
+  }
+  .rh-track-artist {
+    font-size: 12px !important;
+  }
+  .rp-title {
+    font-size: 13px !important;
+  }
+  .rp-artist {
+    font-size: 11px !important;
+  }
+  .fv-title {
+    font-size: 14px !important;
+  }
+  .live-stat-value {
+    font-size: 22px !important;
+  }
+  .sc-name {
+    font-size: 13px !important;
+  }
+  .vg-title {
+    font-size: 11px !important;
+  }
+  .dh-greeting .name {
+    font-size: 15px !important;
+  }
+  .dh-greeting .hello {
+    font-size: 12px !important;
+  }
+  .tv-broadcast-value {
+    font-size: 12px !important;
+  }
+  .tv-broadcast-label {
+    font-size: 10px !important;
+  }
+}
+
 /* ── Tablet-optimised content spacing ── */
 @media (min-width: 768px) {
   .content-scroll { padding: 0 24px 80px !important; }

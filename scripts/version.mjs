@@ -46,7 +46,7 @@ function readBuildGradle() {
   };
 }
 
-function bumpSemver(current: string): string {
+function bumpSemver(current) {
   const parts = current.split(".").map(Number);
   // If not a valid semver, start from "1.0.0"
   if (parts.length < 2 || parts.some(isNaN)) return "1.0.0";
