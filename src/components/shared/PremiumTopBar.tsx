@@ -49,9 +49,7 @@ export default function PremiumTopBar({
           position: relative;
         }
         .ptb-safe {
-          height: env(safe-area-inset-top, 20px);
-          min-height: 20px;
-          background: var(--bg, #0F0F0F);
+          height: env(safe-area-inset-top, 0px);
           flex-shrink: 0;
         }
         .ptb-bar {
