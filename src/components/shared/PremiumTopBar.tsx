@@ -1,26 +1,18 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { useState, useEffect } from "react";
 import type { ReactNode } from "react";
 
 interface PremiumTopBarProps {
-  /** Main title text (defaults to "MOD NAKURU") */
   title?: string;
-  /** Subtitle shown below the title */
   subtitle?: string;
-  /** Shows a back chevron button */
   showBack?: boolean;
-  /** Custom back handler (default: router.back()) */
   onBack?: () => void;
-  /** Content rendered on the right side (buttons, badges, etc.) */
   rightContent?: ReactNode;
-  /** When true, renders only the safe-area spacer without branding */
   minimal?: boolean;
-  /** Custom Font Awesome icon class (e.g. "fa-images", "fa-people-group") */
   icon?: string;
-  /** Hides the logo icon entirely */
   hideIcon?: boolean;
-  /** Hides the bottom border/separator */
   noBorder?: boolean;
 }
 
@@ -37,6 +29,19 @@ export default function PremiumTopBar({
 }: PremiumTopBarProps) {
   const router = useRouter();
   const handleBack = onBack || (() => router.back());
+  const [safeTop, setSafeTop] = useState(0);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const { StatusBar } = await import("@capacitor/status-bar");
+        const info = await StatusBar.getInfo();
+        setSafeTop(info.height || 0);
+      } catch {
+        setSafeTop(0);
+      }
+    })();
+  }, []);
 
   return (
     <>
@@ -49,7 +54,7 @@ export default function PremiumTopBar({
           position: relative;
         }
         .ptb-safe {
-          height: env(safe-area-inset-top, 0px);
+          height: ${safeTop}px;
           flex-shrink: 0;
         }
         .ptb-bar {
