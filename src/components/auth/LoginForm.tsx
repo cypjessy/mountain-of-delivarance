@@ -329,16 +329,6 @@ export default function LoginForm() {
             Create Account
           </a>
         </p>
-        <p style={{ marginTop: 16, fontSize: 12, color: "var(--text-tertiary)" }}>
-          First time setting up?{" "}
-          <a href="#" onClick={(e) => {
-            e.preventDefault();
-            document.getElementById("tempAdminModal")?.classList.add("active");
-            document.body.style.overflow = "hidden";
-          }}>
-            Register as Admin
-          </a>
-        </p>
       </div>
     </>
   );

@@ -39,11 +39,11 @@ export async function uploadToBunny(
   storagePath: string,
   contentType: string = "application/octet-stream"
 ): Promise<{ success: boolean; cdnUrl: string }> {
-  const url = `https://${BUNNY_STORAGE_HOST}/${BUNNY_STORAGE_ZONE}/${storagePath}`;
+  const url = `https://${CLIENT_BUNNY_STORAGE_HOST}/${CLIENT_BUNNY_STORAGE_ZONE}/${storagePath}`;
   const res = await fetch(url, {
     method: "PUT",
     headers: {
-      AccessKey: BUNNY_API_KEY,
+      AccessKey: CLIENT_BUNNY_API_KEY,
       "Content-Type": contentType,
       "Content-Length": String(buffer.length),
     },
@@ -55,7 +55,7 @@ export async function uploadToBunny(
   }
   return {
     success: true,
-    cdnUrl: `${BUNNY_CDN_URL}/${storagePath}`,
+    cdnUrl: `${CLIENT_BUNNY_CDN_URL}/${storagePath}`,
   };
 }
 
@@ -63,11 +63,11 @@ export async function uploadToBunny(
  * Delete a file from BunnyCDN storage zone.
  */
 export async function deleteFromBunny(storagePath: string): Promise<boolean> {
-  const url = `https://${BUNNY_STORAGE_HOST}/${BUNNY_STORAGE_ZONE}/${storagePath}`;
+  const url = `https://${CLIENT_BUNNY_STORAGE_HOST}/${CLIENT_BUNNY_STORAGE_ZONE}/${storagePath}`;
   const res = await fetch(url, {
     method: "DELETE",
     headers: {
-      AccessKey: BUNNY_API_KEY,
+      AccessKey: CLIENT_BUNNY_API_KEY,
     },
   });
   if (res.status === 404) return true; // already gone
@@ -78,9 +78,9 @@ export async function deleteFromBunny(storagePath: string): Promise<boolean> {
  * List files in a directory path.
  */
 export async function listBunnyFiles(prefix: string): Promise<BunnyFileInfo[]> {
-  const url = `https://${BUNNY_STORAGE_HOST}/${BUNNY_STORAGE_ZONE}/${prefix}`;
+  const url = `https://${CLIENT_BUNNY_STORAGE_HOST}/${CLIENT_BUNNY_STORAGE_ZONE}/${prefix}`;
   const res = await fetch(url, {
-    headers: { AccessKey: BUNNY_API_KEY },
+    headers: { AccessKey: CLIENT_BUNNY_API_KEY },
   });
   if (!res.ok) throw new Error(`BunnyCDN list failed (${res.status})`);
   const data = await res.json();
@@ -92,9 +92,9 @@ export async function listBunnyFiles(prefix: string): Promise<BunnyFileInfo[]> {
  */
 export async function getBunnyStorageStats(): Promise<BunnyStorageStats> {
   try {
-    const url = `https://${BUNNY_STORAGE_HOST}/${BUNNY_STORAGE_ZONE}/`;
+    const url = `https://${CLIENT_BUNNY_STORAGE_HOST}/${CLIENT_BUNNY_STORAGE_ZONE}/`;
     const res = await fetch(url, {
-      headers: { AccessKey: BUNNY_API_KEY },
+      headers: { AccessKey: CLIENT_BUNNY_API_KEY },
     });
     if (!res.ok) throw new Error(`BunnyCDN stats failed (${res.status})`);
     const files: BunnyFileInfo[] = await res.json();
@@ -111,14 +111,14 @@ export async function getBunnyStorageStats(): Promise<BunnyStorageStats> {
 /**
  * Purge CDN cache for a specific URL or the entire zone.
  */
-export async function purgeBunnyCache(url?: string): Promise<boolean> {
-  const purgeUrl = url
-    ? `https://api.bunny.net/purge?url=${encodeURIComponent(url)}`
-    : `https://api.bunny.net/purge?zone=${BUNNY_STORAGE_ZONE}`;
+export async function purgeBunnyCache(cdnUrl?: string): Promise<boolean> {
+  const purgeUrl = cdnUrl
+    ? `https://api.bunny.net/purge?url=${encodeURIComponent(cdnUrl)}`
+    : `https://api.bunny.net/purge?zone=${CLIENT_BUNNY_STORAGE_ZONE}`;
   const res = await fetch(purgeUrl, {
     method: "POST",
     headers: {
-      AccessKey: BUNNY_API_KEY,
+      AccessKey: CLIENT_BUNNY_API_KEY,
     },
   });
   return res.ok;
@@ -194,33 +194,15 @@ export async function directUploadToBunny(
 }
 
 /**
- * Upload a file — uses direct-to-Bunny when running in Capacitor native (APK),
- * otherwise falls back to the Vercel server proxy for same-origin safety on web.
+ * Upload a file directly to BunnyCDN from any platform (browser or Capacitor native).
+ * No server proxy needed — client-side credentials call Bunny's storage API directly.
  */
 export async function uploadFile(
   file: File,
   churchId: string,
   category: string = "gallery"
 ): Promise<{ cdnUrl: string; fileSize: number; storagePath: string; width: number; height: number }> {
-  // Detect Capacitor native: use direct upload (no server available in static export)
-  if (typeof window !== "undefined" &&
-      typeof (window as any).Capacitor?.isNativePlatform === "function" &&
-      (window as any).Capacitor.isNativePlatform()) {
-    return directUploadToBunny(file, churchId, category);
-  }
-
-  // Web: use the Vercel server proxy
-  const { apiFetch } = await import("@/lib/api");
-  const formData = new FormData();
-  formData.append("file", file);
-  formData.append("church_id", churchId);
-  formData.append("category", category);
-  const res = await apiFetch("/api/content/upload", { method: "POST", body: formData });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || "Upload failed");
-  }
-  return res.json();
+  return directUploadToBunny(file, churchId, category);
 }
 
 /**

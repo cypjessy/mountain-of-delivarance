@@ -5,10 +5,12 @@ import { useRouter } from "next/navigation";
 import AdminBottomNav from "@/components/admin/AdminBottomNav";
 import ToastBridge from "@/components/dashboard/ToastBridge";
 import { hapticSuccess } from "@/lib/haptics";
-import { Timestamp } from "firebase/firestore";
+import { Timestamp, setDoc, doc, deleteDoc, onSnapshot, serverTimestamp } from "firebase/firestore";
+import { db } from "@/lib/firebase";
 import { getAdminUsers } from "@/lib/users";
 import type { UserProfile } from "@/lib/users";
 import PremiumTopBar from "@/components/shared/PremiumTopBar";
+import ShareAppQrModal from "@/components/shared/ShareAppQrModal";
 import SubscriptionsTab from "@/components/admin/SubscriptionsTab";
 import type { SubscriptionPayment } from "@/lib/subscriptions";
 
@@ -99,6 +101,11 @@ export default function AdminAccountsPage() {
   const [activeTab, setActiveTab] = useState<"accounts" | "subscriptions">("accounts");
   const [admins, setAdmins] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showQr, setShowQr] = useState(false);
+  const [notifSending, setNotifSending] = useState(false);
+  const [notifRemoving, setNotifRemoving] = useState(false);
+  const [hasActiveNotif, setHasActiveNotif] = useState(false);
+  const [notifResult, setNotifResult] = useState<string | null>(null);
 
   const showToast = (title: string, message: string, type: string, duration: number) => {
     window.dispatchEvent(new CustomEvent("show-toast", { detail: { title, message, type, duration } }));
@@ -117,6 +124,14 @@ export default function AdminAccountsPage() {
   }, []);
 
   useEffect(() => { setTimeout(() => loadAdmins(), 0); }, [loadAdmins]);
+
+  // ════ App Update Notification listener ════
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "update_notifications", "latest"), (snap) => {
+      setHasActiveNotif(snap.exists());
+    });
+    return () => unsub();
+  }, []);
 
   // ════ Paystack Redirect Callback ════
   // After paying on mobile (Capacitor), Paystack redirects back to this page
@@ -341,6 +356,27 @@ export default function AdminAccountsPage() {
             opacity: 0.9;
         }
 
+        .btn-secondary {
+            width: 100%;
+            padding: 14px;
+            background: transparent;
+            border: 1.5px solid var(--border);
+            border-radius: var(--radius-md);
+            color: var(--text-primary);
+            font-size: 15px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn-secondary:active {
+            background: var(--surface-elevated);
+        }
+
         .section-title {
             font-size: 14px;
             font-weight: 700;
@@ -440,6 +476,11 @@ export default function AdminAccountsPage() {
           showBack
           onBack={() => router.push("/admin")}
           title="Admin Accounts"
+          rightContent={
+            <button className="header-btn" onClick={() => setShowQr(true)} title="Share App" style={{ width: 36, height: 36, borderRadius: "50%", background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-secondary)", fontSize: 15, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.2s" }}>
+              <i className="fas fa-share-nodes"></i>
+            </button>
+          }
         />
 
         {/* ════ Tab Bar ════ */}
@@ -529,6 +570,72 @@ export default function AdminAccountsPage() {
             <button className="btn-primary" onClick={handleCopyLink}>
               <i className="fas fa-copy"></i> Copy Invite Link
             </button>
+
+            <div style={{ height: 12 }} />
+
+            {hasActiveNotif ? (
+              <>
+                <button
+                  className="btn-secondary"
+                  onClick={async () => {
+                    setNotifRemoving(true);
+                    try {
+                      await deleteDoc(doc(db, "update_notifications", "latest"));
+                      setNotifResult("✅ Notification removed from dashboards");
+                    } catch (e: any) {
+                      setNotifResult(`❌ ${e.message || "Failed to remove"}`);
+                    }
+                    setNotifRemoving(false);
+                  }}
+                  disabled={notifRemoving}
+                  style={{
+                    background: notifRemoving ? "var(--surface-elevated)" : undefined,
+                    opacity: notifRemoving ? 0.6 : 1,
+                  }}
+                >
+                  {notifRemoving ? (
+                    <><i className="fas fa-spinner fa-spin"></i> Removing...</>
+                  ) : (
+                    <><i className="fas fa-bell-slash"></i> Remove Notification</>
+                  )}
+                </button>
+              </>
+            ) : (
+              <button
+                className="btn-primary"
+                onClick={async () => {
+                  setNotifSending(true);
+                  setNotifResult(null);
+                  try {
+                    await setDoc(doc(db, "update_notifications", "latest"), {
+                      versionName: "latest",
+                      downloadUrl: "https://mountain-of-delivarance.vercel.app/app-release.apk",
+                      sentAt: serverTimestamp(),
+                    });
+                    setNotifResult("✅ App update notification sent!");
+                  } catch (e: any) {
+                    setNotifResult(`❌ ${e.message || "Failed to send"}`);
+                  }
+                  setNotifSending(false);
+                }}
+                disabled={notifSending}
+                style={{
+                  background: notifSending ? "var(--surface-elevated)" : undefined,
+                  opacity: notifSending ? 0.6 : 1,
+                }}
+              >
+                {notifSending ? (
+                  <><i className="fas fa-spinner fa-spin"></i> Sending...</>
+                ) : (
+                  <><i className="fas fa-bell"></i> Send App Update Notification</>
+                )}
+              </button>
+            )}
+            {notifResult && (
+              <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 8, textAlign: "center" }}>
+                {notifResult}
+              </div>
+            )}
           </div>
 
           <div className="section-title"><i className="fas fa-users"></i> Current Admins ({admins.length})</div>
@@ -571,6 +678,7 @@ export default function AdminAccountsPage() {
         )}
       </div>
 
+      <ShareAppQrModal open={showQr} onClose={() => setShowQr(false)} />
       <AdminBottomNav />
       <ToastBridge />
     </>

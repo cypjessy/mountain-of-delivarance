@@ -38,7 +38,7 @@ export function isPaystackTestMode(): boolean {
 // ═══════════════════════════════════════════════
 
 export const PAYSTACK_PLANS = {
-  "VPS S": { amountKES: 4372, label: "KES 4,372" },
+  "VPS S": { amountKES: 2960, label: "KES 2,960" },
   "VPS M": { amountKES: 5790, label: "KES 5,790" },
 } as const;
 

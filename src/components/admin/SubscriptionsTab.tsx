@@ -14,7 +14,7 @@ import {
   getPaymentHistory,
   recordPayment,
   updatePlan,
-  activateTrial,
+
   getBillingSnapshot,
   getBillingPeriodLabel,
   getNextBillingDate,
@@ -136,8 +136,7 @@ export default function SubscriptionsTab() {
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [payments, setPayments] = useState<SubscriptionPayment[]>([]);
   const [loadingPayments, setLoadingPayments] = useState(true);
-  const [activatingTrial, setActivatingTrial] = useState(false);
-  const [trialDuration, setTrialDuration] = useState(30);
+
 
   // Tick every second for live countdown
   useEffect(() => {
@@ -210,8 +209,8 @@ export default function SubscriptionsTab() {
     port: "1 Gbit/s",
     traffic: "Unlimited*",
     protection: "DDoS Protected",
-    priceKES: "KES 4,372",
-    priceEUR: "€29.60",
+    priceKES: "KES 2,960",
+    priceEUR: "€20",
   };
 
   const upgradePlan = {
@@ -614,25 +613,6 @@ export default function SubscriptionsTab() {
       window.dispatchEvent(new CustomEvent("show-toast", {
         detail: { title: "Payment Error", message: err.message || "Something went wrong", type: "error", duration: 5000 },
       }));
-    }
-  }
-
-  async function handleActivateTrial() {
-    setActivatingTrial(true);
-    try {
-      const plan = isUpgraded ? "VPS M" : "VPS S";
-      await activateTrial(plan, trialDuration);
-      const newStatus = await getSubscriptionStatus();
-      setSubStatus(newStatus);
-      window.dispatchEvent(new CustomEvent("show-toast", {
-        detail: { title: "Free Trial Activated", message: `${trialDuration}-day free trial started on ${plan}`, type: "success", duration: 4000 },
-      }));
-    } catch (err: any) {
-      window.dispatchEvent(new CustomEvent("show-toast", {
-        detail: { title: "Trial Error", message: err?.message || "Could not activate trial", type: "error", duration: 4000 },
-      }));
-    } finally {
-      setActivatingTrial(false);
     }
   }
 
@@ -1325,123 +1305,7 @@ export default function SubscriptionsTab() {
           )}
         </div>
 
-        {/* ════ Activate Free Trial Button (shows only before trial ever activated — once used, gone forever) ════ */}
-        {subStatus?.trialStartDate == null && !loadingStatus && (
-          <div style={{
-            background: "var(--surface-card)",
-            border: "1px solid rgba(59,130,246,0.2)",
-            borderRadius: "var(--radius-lg)",
-            padding: "20px",
-            marginBottom: 20,
-            position: "relative",
-            overflow: "hidden",
-          }}>
-            <div style={{
-              position: "absolute", top: "-30%", right: "-10%",
-              width: 140, height: 140,
-              background: "radial-gradient(circle, rgba(59,130,246,0.08) 0%, transparent 70%)",
-              pointerEvents: "none",
-            }} />
 
-            <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 14 }}>
-              <div style={{
-                width: 48, height: 48,
-                borderRadius: "var(--radius-full)",
-                background: "rgba(59,130,246,0.12)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                flexShrink: 0,
-                fontSize: 20,
-                color: "#3B82F6",
-              }}>
-                <i className="fas fa-gift"></i>
-              </div>
-              <div>
-                <div style={{ fontSize: 16, fontWeight: 700 }}>Activate Free Trial</div>
-                <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>
-                  Try {isUpgraded ? "VPS M" : "VPS S"} free — choose your trial period
-                </div>
-              </div>
-            </div>
-
-            {/* Duration presets */}
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 11, color: "var(--text-tertiary)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 8 }}>
-                Trial Period
-              </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                {[7, 14, 30, 60, 90].map((days) => (
-                  <button
-                    key={days}
-                    onClick={() => setTrialDuration(days)}
-                    disabled={activatingTrial}
-                    style={{
-                      flex: 1,
-                      padding: "10px 0",
-                      border: days === trialDuration ? "1.5px solid #3B82F6" : "1px solid var(--border)",
-                      borderRadius: "var(--radius-sm)",
-                      background: days === trialDuration ? "rgba(59,130,246,0.1)" : "var(--surface)",
-                      color: days === trialDuration ? "#3B82F6" : "var(--text-secondary)",
-                      fontSize: 13,
-                      fontWeight: days === trialDuration ? 700 : 600,
-                      cursor: activatingTrial ? "not-allowed" : "pointer",
-                      transition: "all 0.2s",
-                      textAlign: "center",
-                    }}
-                  >
-                    {days}d
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <ul style={{
-              listStyle: "none",
-              padding: 0,
-              margin: "0 0 16px",
-              display: "flex",
-              flexDirection: "column",
-              gap: 6,
-              fontSize: 12,
-              color: "var(--text-secondary)",
-            }}>
-              <li><i className="fas fa-check-circle" style={{ color: "#3B82F6", width: 16, marginRight: 6 }}></i>Full access to all features during trial</li>
-              <li><i className="fas fa-check-circle" style={{ color: "#3B82F6", width: 16, marginRight: 6 }}></i>No credit card required</li>
-              <li><i className="fas fa-check-circle" style={{ color: "#3B82F6", width: 16, marginRight: 6 }}></i>Billing starts automatically after {trialDuration} days</li>
-            </ul>
-
-            <button
-              onClick={handleActivateTrial}
-              disabled={activatingTrial}
-              style={{
-                width: "100%",
-                padding: "14px",
-                border: "none",
-                borderRadius: "var(--radius-md)",
-                fontSize: 15,
-                fontWeight: 700,
-                cursor: activatingTrial ? "not-allowed" : "pointer",
-                transition: "all 0.2s",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 8,
-                background: activatingTrial
-                  ? "var(--surface-elevated)"
-                  : "linear-gradient(135deg, #2563EB, #3B82F6)",
-                color: "#fff",
-                opacity: activatingTrial ? 0.7 : 1,
-              }}
-            >
-              {activatingTrial ? (
-                <><i className="fas fa-spinner fa-spin"></i> Activating trial…</>
-              ) : (
-                <><i className="fas fa-gift"></i> Activate Free Trial — {trialDuration} Days</>
-              )}
-            </button>
-          </div>
-        )}
 
         {/* ════ Payment History ════ */}
         <div className="payments-card" style={{

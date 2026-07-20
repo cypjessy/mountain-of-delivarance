@@ -64,7 +64,7 @@ export default function AdminRadioPage() {
   useEffect(() => {
     getRadioConfig().then((config) => {
       if (config) setRadioConfig({
-        stationName: config.stationName || "MOUNTAIN OF DELIVERANCE CHURCH Radio",
+        stationName: config.stationName || "MOD NAKURU Radio",
         description: config.description || "Radio Station",
         stationId: config.stationId || "4",
         embedUrl: config.embedUrl || "https://azuracast.histoview.co.ke/public/mountain_of_delivarance_church/embed?autoplay=1&rounded=1&allow_popup=1&continuous=1",

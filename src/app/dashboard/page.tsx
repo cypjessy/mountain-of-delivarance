@@ -7,9 +7,11 @@ import { churchConfig } from "@/lib/churchConfig";
 import { auth } from "@/lib/firebase";
 import { useAppStore } from "@/lib/useAppStore";
 import BottomNavBar from "@/components/shared/BottomNavBar";
-import { doc, updateDoc } from "firebase/firestore";
+import { doc, updateDoc, onSnapshot } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import ToastBridge from "@/components/dashboard/ToastBridge";
+import AppUpdateBubble from "@/components/shared/AppUpdateBubble";
+import ShareAppQrModal from "@/components/shared/ShareAppQrModal";
 import EventCarousel from "@/components/dashboard/EventCarousel";
 import AlbumCarousel from "@/components/shared/AlbumCarousel";
 import { useImageLightbox } from "@/components/shared/ImageLightbox";
@@ -428,6 +430,9 @@ export default function DashboardPage() {
   const [scheduleItems, setScheduleItems] = useState<ScheduleSlot[]>([]);
   const [scheduleLoading, setScheduleLoading] = useState(true);
   const [contentReady, setContentReady] = useState(false);
+  const [updateNotif, setUpdateNotif] = useState<{versionName: string; downloadUrl: string; sentAt: any} | null>(null);
+  const [showQr, setShowQr] = useState(false);
+  const [liveTvStatus, setLiveTvStatus] = useState<{isLive: boolean; liveVideoId: string | null; liveTitle: string | null} | null>(null);
 
   // ─── Video Gallery ───
   const [recentVideos, setRecentVideos] = useState<YouTubeVideo[]>([]);
@@ -826,6 +831,40 @@ export default function DashboardPage() {
     return () => { canceled = true; };
   }, [saveTvProgress, tvPlayer]);
 
+  // ─── App update notification listener ───
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "update_notifications", "latest"), (snap: any) => {
+      if (snap.exists()) {
+        const d = snap.data();
+        if (d.downloadUrl) {
+          setUpdateNotif({
+            versionName: d.versionName || "latest",
+            downloadUrl: d.downloadUrl,
+            sentAt: d.sentAt || null,
+          });
+        }
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  // ─── Live TV status listener (tv_live_status/main in Firestore) ───
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "tv_live_status", "main"), (snap: any) => {
+      if (snap.exists()) {
+        const d = snap.data();
+        setLiveTvStatus({
+          isLive: d.isLive || false,
+          liveVideoId: d.liveVideoId || null,
+          liveTitle: d.liveTitle || null,
+        });
+      } else {
+        setLiveTvStatus(null);
+      }
+    });
+    return () => unsub();
+  }, []);
+
   /* Tab visibility — save on hide, merge remote state on show (web) */
   useEffect(() => {
     const handleVisibilityChange = () => {
@@ -1036,6 +1075,10 @@ export default function DashboardPage() {
           <button className="tv-start-btn" onClick={handleStartTv} title={tvStartCountdown > 0 ? `Ready in ${tvStartCountdown}s` : "Skip to next video"} disabled={tvStartCountdown > 0}>
             <i className="fas fa-play"></i>
             <span>{tvStartCountdown > 0 ? `Starting in ${tvStartCountdown}s` : 'Start TV'}</span>
+          </button>
+          <button className="tv-start-btn" onClick={() => router.push("/oracle-tv")} style={{ background: "linear-gradient(135deg, #8B5CF6, #6D28D9)" }}>
+            <i className="fas fa-tower-broadcast"></i>
+            <span>Oracle TV Live</span>
           </button>
           <div className="tv-start-hint">Click to switch playlist</div>
 
@@ -2525,6 +2568,15 @@ export default function DashboardPage() {
 
       <ToastBridge />
 
+      {updateNotif && (
+        <AppUpdateBubble
+          update={updateNotif}
+          onDismiss={() => setUpdateNotif(null)}
+        />
+      )}
+
+      <ShareAppQrModal open={showQr} onClose={() => setShowQr(false)} />
+
       {/* ===== ONBOARDING ===== */}
       {showOnboarding && (
         <div className="onboarding-overlay">
@@ -2563,6 +2615,22 @@ export default function DashboardPage() {
           </div>
         )}
 
+        {/* ─── LIVE BANNER ─── */}
+        {liveTvStatus?.isLive && (
+          <div className="live-banner">
+            <div className="live-banner-left">
+              <span className="live-banner-dot"></span>
+              <div className="live-banner-info">
+                <div className="live-banner-title">MOD NAKURU IS LIVE</div>
+                <div className="live-banner-sub">{liveTvStatus.liveTitle || "Watch live stream now"}</div>
+              </div>
+            </div>
+            <button className="live-banner-btn" onClick={() => router.push("/live")}>
+              <i className="fas fa-play"></i> Watch
+            </button>
+          </div>
+        )}
+
         {/* HEADER */}
         <header className="dash-header">
           <div className="dh-left">
@@ -2575,6 +2643,9 @@ export default function DashboardPage() {
             </div>
           </div>
           <div className="dh-right">
+            <button className="dh-btn" onClick={() => setShowQr(true)} title="Share App">
+              <i className="fas fa-share-nodes"></i>
+            </button>
             <button className="dh-btn logout" onClick={handleLogout} title="Sign out">
               <i className="fas fa-right-from-bracket"></i>
             </button>

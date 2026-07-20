@@ -3,7 +3,8 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { signOut as firebaseSignOut } from "firebase/auth";
-import { auth } from "@/lib/firebase";
+import { doc, onSnapshot, deleteDoc } from "firebase/firestore";
+import { auth, db } from "@/lib/firebase";
 import { useAppStore } from "@/lib/useAppStore";
 import { getNowPlaying as azuracastGetNowPlaying, getSongHistory, getStationStatus, getQueue, toggleAutoDJ, getStreamers, deleteStreamer, getStationId } from "@/lib/azuracast";
 import type { QueueItem, Streamer, Playlist } from "@/lib/azuracast";
@@ -19,6 +20,8 @@ import ToastBridge from "@/components/dashboard/ToastBridge";
 import EventCarousel from "@/components/dashboard/EventCarousel";
 import AlbumCarousel from "@/components/shared/AlbumCarousel";
 import PremiumTopBar from "@/components/shared/PremiumTopBar";
+import AppUpdateBubble from "@/components/shared/AppUpdateBubble";
+import ShareAppQrModal from "@/components/shared/ShareAppQrModal";
 
 /* ==================================================================
    MOCK DATA
@@ -94,6 +97,13 @@ export default function AdminPage() {
   const storeChurchConfig = useAppStore((s) => s.churchConfig);
   const churchInfo = {
     name: storeChurchConfig?.name || "Church",
+    shortName: (() => {
+      const full = storeChurchConfig?.name || "Church";
+      const words = full.split(" ").filter((w:string) => w.length > 0);
+      const initials = words.map((w:string) => w[0]).join("").toUpperCase();
+      const city = words.length >= 4 ? words[words.length - 2] : words[words.length - 1];
+      return `${initials.slice(0, 3)} ${city}`.trim();
+    })(),
     tagline: storeChurchConfig?.tagline || "",
     logoInitials: (storeChurchConfig?.name || "CH").split(" ").map((w:string) => w[0]).join("").slice(0, 3).toUpperCase(),
   };
@@ -113,6 +123,9 @@ export default function AdminPage() {
   const [autoDJToggling, setAutoDJToggling] = useState(false);
   const [liveStreamers, setLiveStreamers] = useState<Streamer[]>([]);
   const [streamDeletingId, setStreamDeletingId] = useState<string | null>(null);
+  const [updateNotif, setUpdateNotif] = useState<{versionName: string; downloadUrl: string; sentAt: any} | null>(null);
+  const [showQr, setShowQr] = useState(false);
+  const [liveTvStatus, setLiveTvStatus] = useState<{isLive: boolean; liveVideoId: string | null; liveTitle: string | null} | null>(null);
 
   const [stationUptime, setStationUptime] = useState("");
 
@@ -311,6 +324,39 @@ export default function AdminPage() {
     return () => { mounted = false; };
   }, []);
 
+  // ─── App update notification listener ───
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "update_notifications", "latest"), (snap: any) => {
+      if (snap.exists()) {
+        const d = snap.data();
+        if (d.downloadUrl) {
+          setUpdateNotif({
+            versionName: d.versionName || "latest",
+            downloadUrl: d.downloadUrl,
+            sentAt: d.sentAt || null,
+          });
+        }
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  // ─── Live TV status listener (tv_live_status/main in Firestore) ───
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "tv_live_status", "main"), (snap: any) => {
+      if (snap.exists()) {
+        const d = snap.data();
+        setLiveTvStatus({
+          isLive: d.isLive || false,
+          liveVideoId: d.liveVideoId || null,
+          liveTitle: d.liveTitle || null,
+        });
+      } else {
+        setLiveTvStatus(null);
+      }
+    });
+    return () => unsub();
+  }, []);
 
 
   // Stat cards (YouTube sections removed)
@@ -1633,12 +1679,24 @@ export default function AdminPage() {
 
       <ToastBridge />
 
+      {updateNotif && (
+        <AppUpdateBubble
+          update={updateNotif}
+          onDismiss={async () => {
+            setUpdateNotif(null);
+            try { await deleteDoc(doc(db, "update_notifications", "latest")); } catch {}
+          }}
+        />
+      )}
+
+      <ShareAppQrModal open={showQr} onClose={() => setShowQr(false)} />
+
       {/* ===== SETUP CHECKLIST ===== */}
       {showSetup && !allSetupDone && (
         <div className="setup-overlay">
           <div className="setup-card">
             <div className="setup-welcome">
-              <h2>Welcome to {churchInfo.name}!</h2>
+              <h2>Welcome to {churchInfo.shortName}!</h2>
               <p>Let&apos;s get you set up and broadcasting in no time.</p>
             </div>
             <div className="setup-progress">
@@ -1674,6 +1732,22 @@ export default function AdminPage() {
       <div className="app-container">
         <PremiumTopBar minimal />
 
+        {/* ─── LIVE BANNER ─── */}
+        {liveTvStatus?.isLive && (
+          <div className="live-banner">
+            <div className="live-banner-left">
+              <span className="live-banner-dot"></span>
+              <div className="live-banner-info">
+                <div className="live-banner-title">MOD NAKURU IS LIVE</div>
+                <div className="live-banner-sub">{liveTvStatus.liveTitle || "Watch live stream now"}</div>
+              </div>
+            </div>
+            <button className="live-banner-btn" onClick={() => router.push("/live")}>
+              <i className="fas fa-play"></i> Watch
+            </button>
+          </div>
+        )}
+
         {/* HEADER */}
         <header className="dash-header">
           <div className="dash-header-left">
@@ -1681,25 +1755,31 @@ export default function AdminPage() {
               <i className="fas fa-cross"></i>
             </div>
             <div className="dash-header-info">
-              <h1>{churchInfo.name}</h1>
+              <h1>{churchInfo.shortName}</h1>
             </div>
           </div>
 
-          <div className="dash-header-center">
-            <div className={`dash-onair-badge ${radioBackendRunning ? "live" : "off"}`}>
-              <div className="dash-onair-dot"></div>
-              {radioBackendRunning ? "On Air" : "Off Air"}
+          <div className="dash-header-right" ref={dropdownRef} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <div className={`dash-onair-badge ${radioBackendRunning ? "live" : "off"}`} style={{ padding: "3px 8px", fontSize: 9 }}>
+              <div className="dash-onair-dot" style={{ width: 5, height: 5 }}></div>
+              {radioBackendRunning ? "On Air" : "Off"}
             </div>
-            <div className="dash-listener-count">
-              <i className="fas fa-headphones"></i>
+            <div className="dash-listener-count" style={{ padding: "3px 8px", fontSize: 11 }}>
+              <i className="fas fa-headphones" style={{ fontSize: 10 }}></i>
               <span>{liveListeners}</span>
             </div>
-          </div>
-
-          <div className="dash-header-right" ref={dropdownRef}>
+            <button
+              className="dash-avatar-btn"
+              onClick={() => setShowQr(true)}
+              title="Share App"
+              style={{ width: 32, height: 32, fontSize: 12 }}
+            >
+              <i className="fas fa-share-nodes"></i>
+            </button>
             <button
               className="dash-avatar-btn"
               onClick={() => setShowProfileDropdown((p) => !p)}
+              style={{ width: 32, height: 32, fontSize: 11, border: "1px solid var(--surface-elevated)" }}
             >
               {churchInfo.logoInitials}
             </button>
@@ -1812,6 +1892,10 @@ export default function AdminPage() {
               <button className="tv-start-btn" onClick={handleStartTv} title={tvStartCountdown > 0 ? `Ready in ${tvStartCountdown}s` : "Skip to next video"} disabled={tvStartCountdown > 0}>
                 <i className="fas fa-play"></i>
                 <span>{tvStartCountdown > 0 ? `Starting in ${tvStartCountdown}s` : 'Start TV'}</span>
+              </button>
+              <button className="tv-start-btn" onClick={() => router.push("/oracle-tv")} style={{ background: "linear-gradient(135deg, #8B5CF6, #6D28D9)" }}>
+                <i className="fas fa-tower-broadcast"></i>
+                <span>Oracle TV Live</span>
               </button>
               <div className="tv-start-hint">Click to switch playlist</div>
 

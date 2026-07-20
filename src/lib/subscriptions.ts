@@ -55,7 +55,7 @@ export interface SubscriptionStatus {
 // ═══════════════════════════════════════════════
 
 export const PLAN_PRICES: Record<string, number> = {
-  "VPS S": 4372,
+  "VPS S": 2960,
   "VPS M": 5790,
 };
 
@@ -144,7 +144,7 @@ async function updateSubscriptionStatus(payment: Omit<SubscriptionPayment, "id" 
   const currentPeriod = payment.billingPeriod;
   const amount = payment.amount;
   const plan = payment.plan;
-  const totalDue = PLAN_PRICES[plan] || 4372;
+  const totalDue = PLAN_PRICES[plan] || 2960;
 
   const now = new Date();
   const day = now.getDate();
@@ -258,7 +258,7 @@ export async function getPaymentHistory(): Promise<SubscriptionPayment[]> {
  * Compute the balance (amount still due) for the current period.
  */
 export function computeBalance(status: SubscriptionStatus | null): number {
-  if (!status) return 4372; // default VPS S price
+  if (!status) return 2960; // default VPS S price (20 EUR)
   const balance = status.totalDue - status.paidThisPeriod;
   return Math.max(0, balance);
 }
@@ -274,7 +274,7 @@ export function computeBalance(status: SubscriptionStatus | null): number {
  */
 export async function activateTrial(plan: "VPS S" | "VPS M" = "VPS S", durationDays: number = 30): Promise<void> {
   const statusRef = doc(db, PAYMENTS_COL, STATUS_DOC);
-  const totalDue = PLAN_PRICES[plan] || 4372;
+  const totalDue = PLAN_PRICES[plan] || 2960;
 
   await setDoc(statusRef, {
     plan,
@@ -296,7 +296,7 @@ export async function updatePlan(plan: "VPS S" | "VPS M"): Promise<void> {
   const statusRef = doc(db, PAYMENTS_COL, STATUS_DOC);
   const statusSnap = await getDoc(statusRef);
 
-  const totalDue = PLAN_PRICES[plan] || 4372;
+  const totalDue = PLAN_PRICES[plan] || 2960;
 
   if (statusSnap.exists()) {
     const existing = statusSnap.data() as SubscriptionStatus;
