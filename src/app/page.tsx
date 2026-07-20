@@ -19,62 +19,17 @@ export default function LoginPage() {
 
     (async () => {
       try {
-        const { Keyboard } = await import("@capacitor/keyboard");
         const { App } = await import("@capacitor/app");
-        const { StatusBar, Style } = await import("@capacitor/status-bar");
-        await StatusBar.setStyle({ style: Style.Dark });
-        await StatusBar.setBackgroundColor({ color: "#0F0F0F" });
 
-        const showListener = await Keyboard.addListener("keyboardWillShow", (info) => {
-          const loginScreen = document.querySelector(".login-screen") as HTMLElement | null;
-          if (loginScreen) {
-            loginScreen.style.paddingBottom = info.keyboardHeight + "px";
-          }
-          // Scroll focused input into view so it isn't hidden by the keyboard
-          setTimeout(() => {
-            (document.activeElement as HTMLElement | null)?.scrollIntoView({ behavior: "smooth", block: "center" });
-          }, 150);
-        });
-        const hideListener = await Keyboard.addListener("keyboardWillHide", () => {
-          const loginScreen = document.querySelector(".login-screen") as HTMLElement | null;
-          if (loginScreen) {
-            loginScreen.style.paddingBottom = "0";
-          }
-        });
         const backListener = await App.addListener("backButton", () => {
           App.exitApp().catch(() => {});
         });
 
         cleanup = () => {
-          showListener.remove();
-          hideListener.remove();
           backListener.remove();
         };
       } catch {
-        // Fallback for web — use the old custom event approach
-        function handleKeyboardShow(e: Event) {
-          const evt = e as CustomEvent;
-          const loginScreen = document.querySelector(".login-screen") as HTMLElement | null;
-          if (loginScreen) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            loginScreen.style.paddingBottom = (evt as any).keyboardHeight + "px";
-          }
-          setTimeout(() => {
-            (document.activeElement as HTMLElement | null)?.scrollIntoView({ behavior: "smooth", block: "center" });
-          }, 150);
-        }
-        function handleKeyboardHide() {
-          const loginScreen = document.querySelector(".login-screen") as HTMLElement | null;
-          if (loginScreen) {
-            loginScreen.style.paddingBottom = "0";
-          }
-        }
-        window.addEventListener("keyboardWillShow", handleKeyboardShow);
-        window.addEventListener("keyboardWillHide", handleKeyboardHide);
-        cleanup = () => {
-          window.removeEventListener("keyboardWillShow", handleKeyboardShow);
-          window.removeEventListener("keyboardWillHide", handleKeyboardHide);
-        };
+        // Fallback for web — no-op
       }
     })();
 
@@ -199,17 +154,12 @@ export default function LoginPage() {
             overflow: hidden;
         }
 
-        .status-bar {
-            height: env(safe-area-inset-top, 24px);
-            min-height: 24px;
-            background: var(--bg);
-        }
-
         .login-screen {
             flex: 1;
             display: flex;
             flex-direction: column;
-            padding: 0 28px;
+            justify-content: center;
+            padding: 40px 28px;
             overflow-y: auto;
             -webkit-overflow-scrolling: touch;
         }
@@ -220,7 +170,7 @@ export default function LoginPage() {
             display: flex;
             flex-direction: column;
             align-items: center;
-            padding: 40px 0 32px;
+            padding: 0 0 32px;
             position: relative;
         }
 
@@ -584,7 +534,7 @@ export default function LoginPage() {
             max-height: 85vh;
             background: var(--surface);
             border-radius: 28px 28px 0 0;
-            padding: 0 0 env(safe-area-inset-bottom, 20px);
+            padding: 0 0 env(safe-area-inset-bottom, 0px);
             transform: translateY(100%);
             transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1);
             overflow: hidden;

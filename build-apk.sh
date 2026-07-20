@@ -112,13 +112,13 @@ echo ""
 # Step 4: Build APK
 echo "[4/5] Compiling Android APK (this may take a while)..."
 cd "$PROJECT_DIR/android"
-JAVA_HOME="$JAVA_HOME" ./gradlew assembleDebug
-echo "  ✓ APK compiled"
+JAVA_HOME="$JAVA_HOME" ./gradlew assembleRelease
+echo "  ✓ APK compiled and signed with release keystore"
 echo ""
 
 # Step 5: Copy APK to Documents
 echo "[5/5] Copying APK to Documents..."
-cp "$PROJECT_DIR/android/app/build/outputs/apk/debug/app-debug.apk" "$OUTPUT_PATH"
+cp "$PROJECT_DIR/android/app/build/outputs/apk/release/app-release.apk" "$OUTPUT_PATH"
 echo "  ✓ APK copied to: $OUTPUT_PATH"
 echo ""
 

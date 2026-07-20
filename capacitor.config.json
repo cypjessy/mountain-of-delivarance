@@ -10,9 +10,8 @@
       "androidScaleType": "CENTER_CROP"
     },
     "Keyboard": {
-      "resize": "native",
-      "style": "DARK",
-      "resizeOnFullScreen": true
+      "resize": "none",
+      "style": "DARK"
     },
     "StatusBar": {
       "style": "DARK",

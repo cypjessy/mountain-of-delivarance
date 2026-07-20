@@ -15,6 +15,13 @@
         { "fieldPath": "date", "order": "ASCENDING" },
         { "fieldPath": "startTime", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "app_releases",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "versionCode", "order": "DESCENDING" }
+      ]
     }
   ],
   {

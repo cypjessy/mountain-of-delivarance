@@ -7,6 +7,8 @@ import android.os.Build;
 import android.os.Bundle;
 import android.util.Rational;
 import android.view.View;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
 
@@ -38,32 +40,41 @@ public class MainActivity extends BridgeActivity {
     }
 
     /**
-     * Enables immersive sticky mode — app draws edge-to-edge behind the
+     * Enables immersive mode — app draws edge-to-edge behind the
      * system bars. The status bar and navigation bar auto-hide, and reappear
      * temporarily when the user swipes down (status bar) or up (nav bar).
      * After a few seconds, they slide away again.
+     *
+     * Uses WindowInsetsController on Android 11+ (new API),
+     * falls back to SYSTEM_UI_FLAG_* on older versions.
      */
     private void enableImmersiveMode() {
+        getWindow().setDecorFitsSystemWindows(false);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // Android 11+ prefers the edge-to-edge display API
-            getWindow().setDecorFitsSystemWindows(false);
+            WindowInsetsController controller = getWindow().getInsetsController();
+            if (controller != null) {
+                controller.hide(WindowInsets.Type.navigationBars());
+                controller.setSystemBarsBehavior(
+                    WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                );
+            }
+        } else {
+            getWindow().getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+            );
         }
-        getWindow().getDecorView().setSystemUiVisibility(
-            View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-            | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-            | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-            | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-            | View.SYSTEM_UI_FLAG_FULLSCREEN
-            | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-        );
     }
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // Register the PiP plugin
+        // Register plugins
         registerPlugin(PiPPlugin.class);
+        registerPlugin(ApkInstallPlugin.class);
 
         // ── Immersive edge-to-edge mode ──
         // The app draws behind system bars (status bar + navigation bar).
@@ -91,6 +102,8 @@ public class MainActivity extends BridgeActivity {
                 webView.addJavascriptInterface(new PiPBridge(), "AndroidPiP");
                 jsInterfaceAdded = true;
             }
+            // Prevent Android system font size from scaling WebView content
+            webView.getSettings().setTextZoom(100);
             // Ensure media playback doesn't require user gesture after initial play
             webView.getSettings().setMediaPlaybackRequiresUserGesture(false);
         }

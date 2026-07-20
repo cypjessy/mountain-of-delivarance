@@ -29,6 +29,22 @@ import { useTvPlayer } from "@/lib/tv/TvPlayerProvider";
 import ToastBridge from "@/components/dashboard/ToastBridge";
 import PremiumTopBar from "@/components/shared/PremiumTopBar";
 
+/* ─── TV localStorage key helpers — read uid at call time for logout resilience ─── */
+function getAdminSeekKey(): string {
+  if (typeof window === "undefined") return "admin_tv_resume_seek";
+  const uid = auth.currentUser?.uid;
+  return uid ? `admin_tv_resume_seek_${uid}` : "admin_tv_resume_seek";
+}
+function getAdminIndexKey(): string {
+  if (typeof window === "undefined") return "admin_tv_resume_index";
+  const uid = auth.currentUser?.uid;
+  return uid ? `admin_tv_resume_index_${uid}` : "admin_tv_resume_index";
+}
+function getAdminCachedSeek(): number {
+  if (typeof window === "undefined") return 0;
+  return Number(localStorage.getItem(getAdminSeekKey())) || 0;
+}
+
 export default function AdminTVPage() {
   const router = useRouter();
   const { toggleFullscreen } = useFullscreenToggle();
@@ -72,26 +88,15 @@ export default function AdminTVPage() {
   const [plSaving, setPlSaving] = useState(false);
   const [plDeletingId, setPlDeletingId] = useState<string | null>(null);
   // ─── Admin TV player resume state (for embedded player) ───
-  // Use UID-scoped localStorage keys for per-admin privacy (like member pages)
-  const tvUid = auth.currentUser?.uid;
-  const ADMIN_TV_SEEK_KEY = tvUid ? `admin_tv_resume_seek_${tvUid}` : "admin_tv_resume_seek";
-  const ADMIN_TV_INDEX_KEY = tvUid ? `admin_tv_resume_index_${tvUid}` : "admin_tv_resume_index";
-
-  // One-time migration: clean up old non-UID-scoped keys so admins don't share progress
-  useEffect(() => {
-    if (tvUid && typeof window !== "undefined") {
-      localStorage.removeItem("admin_tv_resume_seek");
-      localStorage.removeItem("admin_tv_resume_index");
-    }
-  }, []);
 
   // Firestore-backed TV progress (persists across browser sessions like member dashboard)
   const [tvFirestoreLoaded, setTvFirestoreLoaded] = useState(false);
 
   const [currentTvIndex, setCurrentTvIndex] = useState(
-    () => typeof window !== "undefined" ? Number(localStorage.getItem(ADMIN_TV_INDEX_KEY)) || 0 : 0
+    () => typeof window !== "undefined" ? Number(localStorage.getItem(getAdminIndexKey())) || 0 : 0
   );
   const [startTvCountdown, setStartTvCountdown] = useState<number | null>(null);
+  const [resumeCountdown, setResumeCountdown] = useState<number | null>(null);
   const [broadcasting, setBroadcasting] = useState(false);
   const [broadcastSlotCount, setBroadcastSlotCount] = useState(0);
   // ─── External video paste ───
@@ -105,9 +110,10 @@ export default function AdminTVPage() {
       })
     );
   }
-  const cachedAdminSeek = typeof window !== "undefined" ? Number(localStorage.getItem(ADMIN_TV_SEEK_KEY)) || 0 : 0;
   const lastAdminTvSeekRef = useRef(0);
   const lastAdminTvIndexRef = useRef(0);
+  // ─── Seek version — forces PlyrPlayer re-mount when Firestore loads a saved seek ───
+  const [seekVersion, setSeekVersion] = useState(0);
 
   // Load current channel data + restore Firestore TV state
   useEffect(() => {
@@ -132,10 +138,17 @@ export default function AdminTVPage() {
           }
           // Restore seek from Firestore (overrides localStorage for fresh session)
           if (tvState.currentSeek > 0.1) {
+            const oldSeek = Number(localStorage.getItem(getAdminSeekKey())) || 0;
             if (typeof window !== "undefined") {
-              localStorage.setItem(ADMIN_TV_SEEK_KEY, String(tvState.currentSeek));
+              localStorage.setItem(getAdminSeekKey(), String(tvState.currentSeek));
             }
             lastAdminTvSeekRef.current = tvState.currentSeek;
+            // If Firestore seek differs from localStorage, force PlyrPlayer to re-mount with new seek
+            if (Math.abs(tvState.currentSeek - oldSeek) > 1) {
+              setSeekVersion(v => v + 1);
+            }
+            // Give user time to resume — 5s countdown before Start TV button becomes active
+            setResumeCountdown(5);
           }
           // Auto-init playlist if empty (fill with all synced videos)
           if (tvState.playlist.length === 0 && videos.length > 0) {
@@ -329,17 +342,16 @@ export default function AdminTVPage() {
     [allVideos]
   );
 
-  // Advance to next video in the admin embedded player (save to Firestore + localStorage)
+  // Advance to next video in the admin embedded player (wraps around like dashboard)
   const advanceTvVideo = useCallback(() => {
     setStartTvCountdown(null);
-    // If on the last video, don't advance — playlist is complete
-    if (lastAdminTvIndexRef.current >= (allVideos.length || 1) - 1) return;
-    const nextIndex = lastAdminTvIndexRef.current + 1;
+    if (allVideos.length === 0) return;
+    const nextIndex = (lastAdminTvIndexRef.current + 1) % allVideos.length;
     setCurrentTvIndex(nextIndex);
     // Reset seek cache
     if (typeof window !== "undefined") {
-      localStorage.setItem(ADMIN_TV_SEEK_KEY, "0");
-      localStorage.setItem(ADMIN_TV_INDEX_KEY, String(nextIndex));
+      localStorage.setItem(getAdminSeekKey(), "0");
+      localStorage.setItem(getAdminIndexKey(), String(nextIndex));
     }
     // Save to Firestore for cross-session persistence
     const uid = auth.currentUser?.uid;
@@ -354,30 +366,33 @@ export default function AdminTVPage() {
   useEffect(() => {
     lastAdminTvIndexRef.current = currentTvIndex;
     if (typeof window !== "undefined") {
-      localStorage.setItem(ADMIN_TV_INDEX_KEY, String(currentTvIndex));
+      localStorage.setItem(getAdminIndexKey(), String(currentTvIndex));
     }
   }, [currentTvIndex]);
 
   // ─── Derive initial seek from localStorage ───
-  const adminTvInitialSeek = cachedAdminSeek > 0.1 ? cachedAdminSeek : undefined;
+  const adminTvInitialSeek = getAdminCachedSeek() > 0.1 ? getAdminCachedSeek() : undefined;
 
   // Track current seek for periodic saves
   const handleAdminTvTimeUpdate = useCallback((time: number) => {
     lastAdminTvSeekRef.current = time;
     if (typeof window !== "undefined") {
-      localStorage.setItem(ADMIN_TV_SEEK_KEY, String(time));
+      localStorage.setItem(getAdminSeekKey(), String(time));
     }
   }, []);
 
-  // Call play() when current video changes
-  // NOTE: No else/hide branch — keeping the player alive across async loads
-  // prevents unnecessary destruction/recreation of the YouTube iframe.
-  // The player is restored from localStorage seek on mount.
+  // Call play() when current video changes (also re-applies seek when Firestore
+  // loads a saved position via seekVersion — see TvPlayerProvider's same-video
+  // seek-delta logic that forces a fresh PlyrPlayer instance).
   useEffect(() => {
-    if (currentVideo) {
-      adminTvPlayer.play(currentVideo.id, adminTvInitialSeek);
+    if (currentVideo && adminTvPlayer) {
+      // Read the latest seek from localStorage (updated by Firestore load effect)
+      const seek = typeof window !== "undefined"
+        ? Number(localStorage.getItem(getAdminSeekKey())) || 0
+        : 0;
+      adminTvPlayer.play(currentVideo.id, seek > 0.1 ? seek : undefined);
     }
-  }, [currentVideo?.id, adminTvInitialSeek, adminTvPlayer]);
+  }, [currentVideo?.id, adminTvPlayer, seekVersion]);
 
   // Keep callbacks in sync with latest versions
   useEffect(() => {
@@ -399,8 +414,8 @@ export default function AdminTVPage() {
     const index = lastAdminTvIndexRef.current;
     // Always persist to localStorage for instant cross-page resume
     if (typeof window !== "undefined") {
-      localStorage.setItem(ADMIN_TV_SEEK_KEY, String(seek));
-      localStorage.setItem(ADMIN_TV_INDEX_KEY, String(index));
+      localStorage.setItem(getAdminSeekKey(), String(seek));
+      localStorage.setItem(getAdminIndexKey(), String(index));
     }
     // Persist to Firestore for cross-session resume
     const uid = auth.currentUser?.uid;
@@ -418,7 +433,7 @@ export default function AdminTVPage() {
     };
   }, [saveAdminTvProgress]);
 
-  // ─── Start TV countdown timer ───
+  // ─── Start TV countdown timer (after video ends — auto-advances) ───
   useEffect(() => {
     if (startTvCountdown === null || startTvCountdown <= 0) return;
     const timer = setTimeout(() => {
@@ -432,6 +447,19 @@ export default function AdminTVPage() {
     }, 1000);
     return () => clearTimeout(timer);
   }, [startTvCountdown, advanceTvVideo]);
+
+  // ─── Resume countdown timer (on page load with saved seek — just releases button) ───
+  useEffect(() => {
+    if (resumeCountdown === null || resumeCountdown <= 0) return;
+    const timer = setTimeout(() => {
+      if (resumeCountdown <= 1) {
+        setResumeCountdown(null); // button becomes active
+      } else {
+        setResumeCountdown(resumeCountdown - 1);
+      }
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [resumeCountdown]);
 
   // Save on page unload / tab hide
   useEffect(() => {
@@ -461,7 +489,7 @@ export default function AdminTVPage() {
             }
             if (state.currentSeek > 0.1) {
               if (typeof window !== "undefined") {
-                localStorage.setItem(ADMIN_TV_SEEK_KEY, String(state.currentSeek));
+                localStorage.setItem(getAdminSeekKey(), String(state.currentSeek));
               }
               lastAdminTvSeekRef.current = state.currentSeek;
             }
@@ -497,9 +525,9 @@ export default function AdminTVPage() {
                   setCurrentTvIndex(s.currentIndex);
                 }
                 if (s.currentSeek > 0.1) {
-                  if (typeof window !== "undefined") {
-                    localStorage.setItem(ADMIN_TV_SEEK_KEY, String(s.currentSeek));
-                  }
+                if (typeof window !== "undefined") {
+                  localStorage.setItem(getAdminSeekKey(), String(s.currentSeek));
+                }
                   lastAdminTvSeekRef.current = s.currentSeek;
                 }
               });
@@ -578,8 +606,9 @@ export default function AdminTVPage() {
     try {
       await setLiveStream(id, liveTitleInput.trim() || "Live Stream", auth.currentUser?.uid || "admin");
       showToast("Live!", "Live stream started for all members", "success", 3000);
-    } catch {
-      showToast("Error", "Could not start live stream", "error", 3000);
+    } catch (e) {
+      console.error("[GoLive]", e);
+      showToast("Error", "Could not start live stream. Check console for details.", "error", 4000);
     }
     setLiveSaving(false);
   }, [liveUrlInput, liveTitleInput]);
@@ -601,10 +630,11 @@ export default function AdminTVPage() {
   // ─── YouTube URL parser ───
   function extractYouTubeId(input: string): string | null {
     const trimmed = input.trim();
+    if (!trimmed) return null;
     // Already a plain ID (11 chars, alphanumeric + -_)
     if (/^[\w-]{11}$/.test(trimmed)) return trimmed;
-    // youtube.com/watch?v=ID
-    const match = trimmed.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/)|youtu\.be\/)([\w-]{11})/);
+    // youtube.com/watch?v=ID   youtube.com/live/ID   youtube.com/embed/ID   youtube.com/shorts/ID   youtu.be/ID
+    const match = trimmed.match(/(?:youtube\.com\/(?:watch\?v=|live\/|embed\/|shorts\/)|youtu\.be\/)([\w-]{11})/);
     return match ? match[1] : null;
   }
 
@@ -1683,7 +1713,7 @@ export default function AdminTVPage() {
             <div className="live-giving-form">
               <div className="form-group">
                 <label className="form-label"><i className="fas fa-church"></i> Church Name</label>
-                <input className="form-input" type="text" value={gcChurchName} onChange={(e) => setGcChurchName(e.target.value)} placeholder="e.g. MOUNTAIN OF DELIVERANCE CHURCH" />
+                <input className="form-input" type="text" value={gcChurchName} onChange={(e) => setGcChurchName(e.target.value)} placeholder="e.g. MOD NAKURU" />
               </div>
               <div className="form-group">
                 <label className="form-label"><i className="fas fa-align-left"></i> Description</label>
@@ -1793,7 +1823,7 @@ export default function AdminTVPage() {
         .content-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; padding-bottom: 80px; }
         .content-scroll::-webkit-scrollbar { display: none; }
 
-        .section { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+        .section { padding: 0 12px 16px; display: flex; flex-direction: column; gap: 12px; }
 
 
         .channel-card {
@@ -2776,65 +2806,97 @@ export default function AdminTVPage() {
           ))}
         </div>
 
-        {/* CONTENT */}
-        <div className="content-scroll">
-            {/* TV CARD — outside section wrapper for edge-to-edge */}
-            {!loading && activeAdminTab === "channel" && channel && (
-              <section className="feed-section">
-                <div className="tv-top-wrap">
-                  <div className="tv-top">
-                    <div className="tv-station">
-                      <i className="fas fa-tv"></i>
-                      <span>Church TV</span>
+        {/* CONTENT */}        <div className="content-scroll">
+          {/* ─── PLAYER SECTION (YouTube embed via TvPlayerProvider portal) ─── */}
+          <div className="tv-top-wrap">
+            <div className="tv-top" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 14px" }}>
+              <div className="tv-station" style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 700 }}>
+                <i className="fas fa-tv" style={{ color: "#3B82F6", fontSize: 14 }}></i>
+                <span>Church TV</span>
+              </div>
+              <div className="tv-badges" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div className={`tv-live-badge ${currentVideo ? "live" : "off"}`} style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 20, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, background: currentVideo ? "rgba(59,130,246,0.12)" : "rgba(107,107,107,0.12)", color: currentVideo ? "#3B82F6" : "var(--text-tertiary)" }}>
+                  <span className="tv-live-dot" style={{ width: 6, height: 6, borderRadius: "50%", background: currentVideo ? "#3B82F6" : "var(--text-tertiary)", animation: currentVideo ? "livePulse 1.5s ease-in-out infinite" : "none" }}></span>
+                  {currentVideo ? "On Air" : "Off Air"}
+                </div>
+                {channel && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: "var(--text-tertiary)", fontWeight: 600 }}>
+                    <i className="fas fa-users" style={{ fontSize: 10 }}></i>
+                    {channel.subscriberCount || "—"}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Player container — ref passed so TvPlayerProvider portal can render PlyrPlayer here */}
+            {currentVideo ? (
+              <div ref={tvPlayerTargetRef} className="tv-player-container" style={{ position: "relative", width: "100%", aspectRatio: "16/9", background: "#000", overflow: "hidden", zIndex: 1 }}>
+                {/* Overlay when playing */}
+                <div className="tv-overlay" style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "10px 14px", background: "linear-gradient(transparent, rgba(0,0,0,0.7))", display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 8, pointerEvents: "none", zIndex: 5 }}>
+                  <div className="tv-overlay-info" style={{ minWidth: 0 }}>
+                    <div className="tv-overlay-now" style={{ fontSize: 10, fontWeight: 700, color: "#3B82F6", textTransform: "uppercase", letterSpacing: 0.5, display: "flex", alignItems: "center", gap: 4 }}>
+                      <i className="fas fa-tv"></i> Now Playing
                     </div>
-                    <div className="tv-badges">
-                      <div className={`tv-live-badge ${currentVideo ? "live" : "off"}`}>
-                        <span className="tv-live-dot"></span>
-                        {currentVideo ? "On Air" : "Off Air"}
-                      </div>
-                      <div className="tv-sub-badge">
-                        <i className="fas fa-users"></i>
-                        {channel?.subscriberCount || "—"}
-                      </div>
+                    <div className="tv-overlay-title" style={{ fontSize: 13, fontWeight: 700, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginTop: 2 }}>
+                      {currentVideo.title}
                     </div>
-                    {startTvCountdown !== null && (
-                      <button
-                        className="tv-start-badge"
-                        onClick={() => {
+                  </div>
+                  <button className="tv-expand-btn" onClick={toggleFullscreen} title="Full screen" style={{ pointerEvents: "auto", width: 32, height: 32, borderRadius: 8, background: "rgba(0,0,0,0.4)", backdropFilter: "blur(8px)", border: "1px solid rgba(255,255,255,0.08)", color: "#fff", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, transition: "all 0.15s" }}>
+                    <i className="fas fa-expand"></i>
+                  </button>
+                </div>
+                {/* Start TV button — overlaid at bottom of player like member TV page */}
+                {currentVideo && (
+                  <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, display: "flex", justifyContent: "center", padding: "10px", zIndex: 15, pointerEvents: "none" }}>
+                    <button
+                      style={{ pointerEvents: "auto", opacity: startTvCountdown !== null || resumeCountdown !== null ? 0.6 : 1, cursor: startTvCountdown !== null || resumeCountdown !== null ? "not-allowed" : "pointer" }}
+                      className="tv-start-btn"
+                      disabled={startTvCountdown !== null || resumeCountdown !== null}
+                      onClick={() => {
+                        if (startTvCountdown === null && resumeCountdown === null) {
                           setStartTvCountdown(null);
                           advanceTvVideo();
-                        }}
-                      >
-                        <i className="fas fa-play"></i>
-                        Start TV
-                        <span className="tv-start-badge-count">{startTvCountdown}s</span>
-                      </button>
-                    )}
-                  </div>
-
-
-
-                  <div className="tv-channel-strip">
-                    <div className="tv-channel-avatar">
-                      {channel.thumbnail ? (
-                        <img src={channel.thumbnail.replace(/^http:/, 'https:')} alt={channel.title} referrerPolicy="no-referrer" crossOrigin="anonymous" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
-                      ) : (
-                        <i className="fab fa-youtube"></i>
-                      )}
-                    </div>
-                    <div className="tv-channel-info">
-                      <div className="tv-channel-name">{channel.title}</div>
-                      <div className="tv-channel-meta">{videoCount} videos</div>
-                    </div>
-                    <button className="tv-watch-btn" onClick={() => router.push("/tv")}>
-                      <i className="fas fa-expand"></i> Manage
+                        }
+                      }}
+                      title={resumeCountdown !== null ? `Resuming in ${resumeCountdown}s` : startTvCountdown !== null ? `Starting in ${startTvCountdown}s` : "Skip to next video"}
+                    >
+                      <i className="fas fa-play"></i>
+                      <span>{resumeCountdown !== null ? `Resuming in ${resumeCountdown}s` : startTvCountdown !== null ? `Starting in ${startTvCountdown}s` : "Start TV"}</span>
                     </button>
                   </div>
-                </div>
-              </section>
+                )}
+              </div>
+            ) : (
+              <div className="tv-no-video" style={{ position: "relative", width: "100%", aspectRatio: "16/9", background: "radial-gradient(ellipse at 50% 50%, rgba(232,168,56,0.04) 0%, transparent 70%)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                <i className="fas fa-video-slash" style={{ fontSize: 28, color: "var(--primary)", opacity: 0.4 }}></i>
+                <span style={{ fontSize: 13, color: "var(--text-tertiary)" }}>TV is off air</span>
+              </div>
             )}
 
-            {loading ? (
+            {/* Channel info strip */}
+            {channel && (
+              <div className="tv-channel-strip" style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: "var(--surface-card)", borderBottom: "1px solid var(--border)" }}>
+                <div className="tv-channel-avatar" style={{ width: 32, height: 32, borderRadius: "50%", background: "rgba(255,0,0,0.1)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, color: "#FF0000", flexShrink: 0, overflow: "hidden", position: "relative" }}>
+                  {channel.thumbnail ? (
+                    <img src={channel.thumbnail.replace(/^http:/, "https:")} alt="" referrerPolicy="no-referrer" crossOrigin="anonymous" style={{ width: "100%", height: "100%", objectFit: "cover", position: "absolute", inset: 0 }} />
+                  ) : (
+                    <i className="fab fa-youtube"></i>
+                  )}
+                </div>
+                <div className="tv-channel-info" style={{ flex: 1, minWidth: 0 }}>
+                  <div className="tv-channel-name" style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{channel.title}</div>
+                  <div className="tv-channel-meta" style={{ fontSize: 11, color: "var(--text-tertiary)" }}>{allVideos.length} videos</div>
+                </div>
+                <button className="tv-watch-btn" onClick={() => router.push("/tv")} style={{ padding: "7px 14px", borderRadius: 8, background: "linear-gradient(135deg, var(--gradient-start, #E8A838), var(--gradient-end, #D4762A))", border: "none", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                  <i className="fas fa-play" style={{ fontSize: 10 }}></i> Watch
+                </button>
+              </div>
+            )}
+
+
+          </div>
+
+          {loading ? (
               <div className="tv-loading-screen">
                 <div className="tv-loading-ring">
                   <div className="tv-loading-ring-inner"></div>

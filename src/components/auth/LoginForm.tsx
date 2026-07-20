@@ -1,11 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { signInWithEmailAndPassword, signInWithPopup } from "firebase/auth";
+import { signInWithEmailAndPassword } from "firebase/auth";
 import { doc } from "firebase/firestore";
 import { useRouter } from "next/navigation";
 import { hapticSuccess, hapticError } from "@/lib/haptics";
-import { auth, db, googleProvider, getDocWithRetry } from "@/lib/firebase";
+import { auth, db, getDocWithRetry } from "@/lib/firebase";
 import { useAppStore } from "@/lib/useAppStore";
 import { churchConfig } from "@/lib/churchConfig";
 
@@ -62,7 +62,7 @@ export default function LoginForm() {
         return;
       }
 
-      await NativeBiometric.verifyIdentity({ reason: "Sign in to MOUNTAIN OF DELIVERANCE CHURCH", title: "Biometric Sign In" });
+      await NativeBiometric.verifyIdentity({ reason: "Sign in to MOD NAKURU", title: "Biometric Sign In" });
 
       setIsLoading(true);
       const result = await signInWithEmailAndPassword(auth, storedCreds.username, storedCreds.password);
@@ -157,49 +157,6 @@ export default function LoginForm() {
         setError("Invalid email address");
       } else {
         setError(e.message || "Something went wrong");
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  }
-
-  async function handleGoogleSignIn() {
-    setError("");
-    setIsLoading(true);
-    try {
-      const result = await signInWithPopup(auth, googleProvider);
-      const firebaseUser = result.user;
-      setUser(firebaseUser);
-
-      // Try to fetch user doc — if it fails (transient offline), navigate forward anyway
-      let userData: any = null;
-      try {
-        const userDocRef = doc(db, "users", firebaseUser.uid);
-        const userSnap = await getDocWithRetry(userDocRef);
-        if (userSnap.exists()) {
-          userData = userSnap.data() as any;
-          setUserDoc(userData);
-          setChurchConfig(churchConfig);
-        }
-      } catch (docErr) {
-        console.warn("[Login] Google doc fetch failed, navigating forward:", docErr);
-      }
-
-      if (userData) {
-        showToast("Welcome Back!", `Signed in as ${userData.display_name || firebaseUser.displayName}`, "success", 2500);
-        setTimeout(() => {
-          if (userData.role === "admin") router.push("/admin");
-          else router.push("/dashboard");
-        }, 500);
-      } else {
-        showToast("Welcome!", "Let's set up your profile", "info");
-        document.getElementById("registerModal")?.classList.add("active");
-        document.body.style.overflow = "hidden";
-      }
-    } catch (err: unknown) {
-      const e = err as { code?: string; message?: string };
-      if (e.code !== "auth/popup-closed-by-user" && e.code !== "auth/cancelled-popup-request") {
-        setError(e.message || "Google sign in failed");
       }
     } finally {
       setIsLoading(false);
@@ -305,16 +262,6 @@ export default function LoginForm() {
           </button>
         )}
 
-        <div className="divider">
-          <span>or continue with</span>
-        </div>
-
-        <div className="social-login" style={{ justifyContent: "center" }}>
-          <button type="button" className="social-btn google" onClick={handleGoogleSignIn} disabled={isLoading} style={{ maxWidth: 220 }}>
-            <i className="fab fa-google"></i>
-            <span>Continue with Google</span>
-          </button>
-        </div>
       </form>
 
       {/* Footer */}

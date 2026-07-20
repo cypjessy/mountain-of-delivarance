@@ -72,6 +72,19 @@ service cloud.firestore {
         allow read, write: if canWriteUser(userId);
       }
 
+      // TV Notes — per-video notes saved by the user
+      match /tv_notes/{videoId} {
+        allow read, write: if canWriteUser(userId);
+      }
+
+      // TV Prayers — per-user prayer requests (admin can reply)
+      match /tv_prayers/{prayerId} {
+        allow read: if isAdmin() || isOwnUser(userId);
+        allow create: if isOwnUser(userId);
+        allow update: if isAdmin();  // admin replies
+        allow delete: if isAdmin();
+      }
+
       match /{document=**} {
         allow read, write: if false;
       }
@@ -200,6 +213,12 @@ service cloud.firestore {
       allow create, update, delete: if isAdmin();
     }
 
+    // App releases (update check — any authenticated user can read)
+    match /app_releases/{releaseId} {
+      allow read: if isAuth();
+      allow create, update, delete: if isAdmin();
+    }
+
     // Radio schedule / now-playing metadata
     match /radio/{docId} {
       allow read: if isAuth();
@@ -303,6 +322,25 @@ service cloud.firestore {
     match /ai_transactions/{transactionId} {
       allow read: if isAuth();
       allow create, update, delete: if isAdmin();
+    }
+
+    // TV Live Status — admin toggles, members read to detect live broadcast
+    match /tv_live_status/{docId} {
+      allow read: if isAuth();
+      allow write: if isAdmin();
+    }
+
+    // TV Active Viewers — heartbeat writes by any authenticated user
+    match /tv_active_viewers/{userId} {
+      allow read: if isAuth();
+      allow create, update: if isAuth() && request.auth.uid == userId;
+      allow delete: if isAdmin();
+    }
+
+    // TV Giving Config — church donation settings for TV kiosk mode
+    match /tv_giving_config/{docId} {
+      allow read: if isAuth();
+      allow write: if isAdmin();
     }
 
     /* ================================================================

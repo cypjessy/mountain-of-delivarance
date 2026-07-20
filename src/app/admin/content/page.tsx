@@ -7,6 +7,12 @@ import { apiFetch } from "@/lib/api";
 import { hapticSuccess } from "@/lib/haptics";
 import { formatBytes, uploadFile } from "@/lib/bunny";
 import {
+  getR2Videos, addR2Video, updateR2Video, deleteR2Video,
+  getR2TvPlaylists, addR2TvPlaylist, deleteR2TvPlaylist,
+  getTvBumperConfig, saveTvBumperConfig, clearTvBumperConfig,
+} from "@/lib/r2Videos";
+import type { R2Video, R2TvPlaylist, TvBumperConfig } from "@/lib/r2Videos";
+import {
   getGalleryPhotos, addGalleryPhoto, updateGalleryPhoto, deleteGalleryPhoto,
 } from "@/lib/content";
 import type { GalleryPhoto } from "@/lib/content";
@@ -16,6 +22,7 @@ import { getAlbums, addAlbum, updateAlbum, deleteAlbum } from "@/lib/albums";
 import type { Album } from "@/lib/albums";
 import { getAlbumEntries, addAlbumEntry, updateAlbumEntry, deleteAlbumEntry } from "@/lib/albumEntries";
 import type { AlbumEntry } from "@/lib/albumEntries";
+import { auth } from "@/lib/firebase";
 import { Timestamp } from "firebase/firestore";
 import PremiumTopBar from "@/components/shared/PremiumTopBar";
 
@@ -65,7 +72,7 @@ function AlbumCarousel({ photos }: { photos: GalleryPhoto[] }) {
 // ========== MAIN COMPONENT ==========
 
 export default function AdminContentPage() {
-  const [activeTab, setActiveTab] = useState<"gallery" | "events" | "settings">("gallery");
+  const [activeTab, setActiveTab] = useState<"gallery" | "events" | "videos">("gallery");
   const [galleryView, setGalleryView] = useState<"grid" | "masonry" | "list">("grid");
   const [galleryFilter, setGalleryFilter] = useState("all");
   const [gallerySort, setGallerySort] = useState("newest");
@@ -139,12 +146,45 @@ export default function AdminContentPage() {
   const [deleteTargets, setDeleteTargets] = useState<{ type: string; count: number }>({ type: "photos", count: 0 });
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
 
-  // Settings state
-  const [autoCompress, setAutoCompress] = useState(true);
-  const [maxWidth, setMaxWidth] = useState("1920");
-  const [outputFormat, setOutputFormat] = useState("webp");
-  const [autoDeleteExpired, setAutoDeleteExpired] = useState(true);
-  const [showPurgeConfirm, setShowPurgeConfirm] = useState(false);
+  // ─── Videos tab state (R2) ───
+  const [r2Videos, setR2Videos] = useState<R2Video[]>([]);
+  const [r2VideosLoading, setR2VideosLoading] = useState(false);
+  const [r2Uploading, setR2Uploading] = useState(false);
+  const [r2UploadProgress, setR2UploadProgress] = useState(0);
+  const [r2SelectedFile, setR2SelectedFile] = useState<File | null>(null);
+  const [r2VideoTitle, setR2VideoTitle] = useState("");
+  const [r2VideoDesc, setR2VideoDesc] = useState("");
+  const [r2VideoCategory, setR2VideoCategory] = useState("sermon");
+  const [r2VideoDuration, setR2VideoDuration] = useState(0);
+
+  // Edit video modal
+  const [editR2Video, setEditR2Video] = useState<R2Video | null>(null);
+  const [editR2Title, setEditR2Title] = useState("");
+  const [editR2Desc, setEditR2Desc] = useState("");
+  const [editR2Category, setEditR2Category] = useState("");
+  const [editR2Featured, setEditR2Featured] = useState(false);
+  const [editR2Hidden, setEditR2Hidden] = useState(false);
+  const [editR2Duration, setEditR2Duration] = useState(0);
+  const [editSaving, setEditSaving] = useState(false);
+
+  // Schedule state
+  const [r2Playlists, setR2Playlists] = useState<R2TvPlaylist[]>([]);
+  const [r2PlaylistsLoading, setR2PlaylistsLoading] = useState(false);
+  const [showR2ScheduleForm, setShowR2ScheduleForm] = useState(false);
+  const [r2ScheduleName, setR2ScheduleName] = useState("");
+  const [r2ScheduleStartIndex, setR2ScheduleStartIndex] = useState(0);
+  const [r2ScheduleVideoIds, setR2ScheduleVideoIds] = useState<string[]>([]);
+  const [r2ScheduleSaving, setR2ScheduleSaving] = useState(false);
+  const [r2ScheduleDeleting, setR2ScheduleDeleting] = useState<string | null>(null);
+
+  // Bumper config state
+  const [r2BumperConfig, setR2BumperConfig] = useState<TvBumperConfig | null>(null);
+  const [r2BumperLoading, setR2BumperLoading] = useState(false);
+  const [r2BumperSaving, setR2BumperSaving] = useState(false);
+  const [r2BumperSelectedId, setR2BumperSelectedId] = useState("");
+
+  // Delete video confirmation
+  const [deleteR2Target, setDeleteR2Target] = useState<string | null>(null);
 
   // Image viewer
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
@@ -208,7 +248,12 @@ export default function AdminContentPage() {
       .then((r) => r.json())
       .then((data) => setStorageUsage(data))
       .catch(() => {});
-    setTimeout(() => fetchData(), 0);
+    setTimeout(() => {
+      fetchData();
+      fetchR2Videos();
+      fetchR2Playlists();
+      fetchTvBumperConfig();
+    }, 0);
   }, [fetchData]);
 
   // ========== DERIVED DATA ==========
@@ -702,6 +747,1090 @@ export default function AdminContentPage() {
     return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   }
 
+  // ========== R2 VIDEOS HANDLERS ==========
+
+  async function fetchR2Videos() {
+    setR2VideosLoading(true);
+    try {
+      const list = await getR2Videos({ includeHidden: true });
+      setR2Videos(list);
+    } catch {
+      setR2Videos([]);
+    }
+    setR2VideosLoading(false);
+  }
+
+  async function fetchR2Playlists() {
+    setR2PlaylistsLoading(true);
+    try {
+      const list = await getR2TvPlaylists();
+      setR2Playlists(list);
+    } catch {
+      setR2Playlists([]);
+    }
+    setR2PlaylistsLoading(false);
+  }
+
+  async function fetchTvBumperConfig() {
+    setR2BumperLoading(true);
+    try {
+      const config = await getTvBumperConfig();
+      setR2BumperConfig(config);
+      if (config) setR2BumperSelectedId(config.r2VideoId);
+    } catch {}
+    setR2BumperLoading(false);
+  }
+
+  function handleR2FileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] || null;
+    if (file) {
+      setR2SelectedFile(file);
+      setR2VideoTitle(file.name.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " "));
+    }
+  }
+
+  /**
+   * Capture a thumbnail frame from a video file using a hidden <video> element.
+   * Seeks to ~10 seconds (or 10% if shorter) and captures a JPEG frame.
+   */
+  async function captureVideoFrame(file: File): Promise<Blob | null> {
+    try {
+      const url = URL.createObjectURL(file);
+      const video = document.createElement("video");
+      video.src = url;
+      video.preload = "auto";
+      video.muted = true;
+      video.playsInline = true;
+
+      // Wait for metadata to load
+      await new Promise<void>((resolve, reject) => {
+        video.onloadedmetadata = () => resolve();
+        video.onerror = () => reject(new Error("Failed to load video"));
+        // Timeout fallback (10 seconds)
+        setTimeout(() => {
+          if (!video.videoWidth) reject(new Error("Video load timeout"));
+          else resolve();
+        }, 30000);
+      });
+
+      // Seek to ~10 seconds or 10% of duration, whichever is smaller
+      const seekTime = Math.min(10, video.duration * 0.1);
+      video.currentTime = seekTime > 0.5 ? seekTime : 0.5;
+
+      // Wait for seek to complete
+      await new Promise<void>((resolve) => {
+        video.onseeked = () => resolve();
+        // Fallback: resolve after 3 seconds even if seek event doesn't fire
+        setTimeout(() => resolve(), 3000);
+      });
+
+      // Capture frame to canvas
+      const canvas = document.createElement("canvas");
+      // Target thumbnail size: 640px wide
+      const targetWidth = 640;
+      const aspect = video.videoWidth / video.videoHeight;
+      canvas.width = targetWidth;
+      canvas.height = Math.round(targetWidth / aspect);
+
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return null;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // Convert to JPEG blob at 80% quality
+      const blob = await new Promise<Blob | null>((resolve) => {
+        canvas.toBlob((b) => resolve(b), "image/jpeg", 0.8);
+      });
+
+      // Cleanup
+      URL.revokeObjectURL(url);
+      video.remove();
+      return blob;
+    } catch {
+      return null;
+    }
+  }
+
+  async function handleR2Upload() {
+    if (!r2SelectedFile) {
+      window.dispatchEvent(new CustomEvent("show-toast", {
+        detail: { title: "No File", message: "Select a video file first", type: "error", duration: 3000 },
+      }));
+      return;
+    }
+    if (!r2VideoTitle.trim()) {
+      window.dispatchEvent(new CustomEvent("show-toast", {
+        detail: { title: "Title Required", message: "Enter a title for the video", type: "error", duration: 3000 },
+      }));
+      return;
+    }
+    const MAX_SIZE = 5 * 1024 * 1024 * 1024; // 5GB
+    if (r2SelectedFile.size > MAX_SIZE) {
+      window.dispatchEvent(new CustomEvent("show-toast", {
+        detail: { title: "File Too Large", message: `File is ${formatFileSize(r2SelectedFile.size)}. Max: 5GB`, type: "error", duration: 4000 },
+      }));
+      return;
+    }
+    setR2Uploading(true);
+    setR2UploadProgress(0);
+
+    // Deduplicate state reads at the top so toasts reference consistent values
+    const file = r2SelectedFile;
+    const title = r2VideoTitle.trim();
+    const description = r2VideoDesc.trim();
+    const category = r2VideoCategory;
+    const duration = r2VideoDuration;
+
+    try {
+      // ═══ Auto-generate thumbnail ═══
+      let thumbnailUrl = "";
+      try {
+        const thumbBlob = await captureVideoFrame(file);
+        if (thumbBlob && thumbBlob.size > 1000) {
+          // Upload thumbnail to R2
+          const thumbToken = await auth.currentUser?.getIdToken();
+          const thumbPresignRes = await fetch("/api/r2/presign", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${thumbToken}` },
+            body: JSON.stringify({
+              fileName: `thumb_${file.name.replace(/\.[^/.]+$/, "")}.jpg`,
+              contentType: "image/jpeg",
+              folder: "thumbnails",
+            }),
+          });
+          if (thumbPresignRes.ok) {
+            const thumbData = await thumbPresignRes.json();
+            await new Promise<void>((resolve, reject) => {
+              const xhr = new XMLHttpRequest();
+              xhr.open("PUT", thumbData.presignedUrl, true);
+              xhr.setRequestHeader("Content-Type", "image/jpeg");
+              xhr.onload = () => {
+                if (xhr.status >= 200 && xhr.status < 300) resolve();
+                else reject();
+              };
+              xhr.onerror = () => reject();
+              xhr.send(thumbBlob);
+            });
+            thumbnailUrl = thumbData.publicUrl;
+          }
+        }
+      } catch {
+        // Thumbnail failure is non-fatal — proceed without one
+      }
+
+      let key: string;
+      let url: string;
+
+        // ── Presigned URL upload (direct browser-to-R2 single PUT, works up to 5GB) ──
+        const videoToken = await auth.currentUser?.getIdToken();
+        const presignRes = await fetch("/api/r2/presign", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${videoToken}` },
+          body: JSON.stringify({
+            fileName: file.name,
+            contentType: file.type || "video/mp4",
+          }),
+        });
+
+        if (!presignRes.ok) {
+          const err = await presignRes.json();
+          throw new Error(err.error || "Failed to get upload URL");
+        }
+
+        const presignData = await presignRes.json();
+        key = presignData.key;
+        url = presignData.publicUrl;
+
+        // Upload directly to R2 via XHR (no CORS issues since user has configured CORS rules)
+        await new Promise<void>((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open("PUT", presignData.presignedUrl, true);
+          xhr.setRequestHeader("Content-Type", file.type || "video/mp4");
+          xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) {
+              const pct = Math.round((e.loaded / e.total) * 90);
+              setR2UploadProgress(Math.min(pct, 90));
+            }
+          };
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) resolve();
+            else reject(new Error(`Upload failed (${xhr.status})`));
+          };
+          xhr.onerror = () => reject(new Error("Network error during upload"));
+          xhr.send(file);
+        });
+
+      setR2UploadProgress(100);
+
+      // Save video metadata to Firestore (with thumbnail URL)
+      await addR2Video({
+        title,
+        description,
+        url,
+        key,
+        fileSize: file.size,
+        contentType: file.type || "video/mp4",
+        originalName: file.name,
+        duration,
+        thumbnail: thumbnailUrl,
+        category,
+        isFeatured: false,
+        isHidden: false,
+      });
+
+      await fetchR2Videos();
+
+      // Reset form
+      setR2SelectedFile(null);
+      setR2VideoTitle("");
+      setR2VideoDesc("");
+      setR2VideoDuration(0);
+      setR2VideoCategory("sermon");
+      setR2UploadProgress(0);
+
+      window.dispatchEvent(new CustomEvent("show-toast", {
+        detail: { title: "Upload Complete", message: `"${title}" uploaded successfully`, type: "success", duration: 3000 },
+      }));
+      await import("@/lib/haptics").then((m) => m.hapticSuccess());
+    } catch (err: any) {
+      window.dispatchEvent(new CustomEvent("show-toast", {
+        detail: { title: "Upload Failed", message: err.message || "Could not upload video", type: "error", duration: 4000 },
+      }));
+    }
+    setR2Uploading(false);
+  }
+  function openEditR2Video(video: R2Video) {
+    setEditR2Video(video);
+    setEditR2Title(video.title);
+    setEditR2Desc(video.description);
+    setEditR2Category(video.category);
+    setEditR2Featured(video.isFeatured);
+    setEditR2Hidden(video.isHidden);
+    setEditR2Duration(video.duration);
+  }
+
+  async function handleSaveR2Video() {
+    if (!editR2Video) return;
+    setEditSaving(true);
+    try {
+      await updateR2Video(editR2Video.id, {
+        title: editR2Title,
+        description: editR2Desc,
+        category: editR2Category,
+        isFeatured: editR2Featured,
+        isHidden: editR2Hidden,
+        duration: editR2Duration,
+      });
+      setR2Videos((prev) =>
+        prev.map((v) =>
+          v.id === editR2Video.id
+            ? { ...v, title: editR2Title, description: editR2Desc, category: editR2Category, isFeatured: editR2Featured, isHidden: editR2Hidden, duration: editR2Duration }
+            : v
+        )
+      );
+      window.dispatchEvent(new CustomEvent("show-toast", {
+        detail: { title: "Video Updated", message: `"${editR2Title}" changes saved`, type: "success", duration: 2500 },
+      }));
+      await import("@/lib/haptics").then((m) => m.hapticSuccess());
+      setEditR2Video(null);
+    } catch {
+      window.dispatchEvent(new CustomEvent("show-toast", {
+        detail: { title: "Error", message: "Failed to save changes", type: "error", duration: 3000 },
+      }));
+    }
+    setEditSaving(false);
+  }
+
+  async function handleDeleteR2Video(id: string) {
+    const video = r2Videos.find((v) => v.id === id);
+    if (!video) return;
+    try {
+      // Delete from R2 storage
+      const deleteToken = await auth.currentUser?.getIdToken();
+      await fetch("/api/r2/delete", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${deleteToken}` },
+        body: JSON.stringify({ key: video.key }),
+      });
+      // Delete metadata from Firestore
+      await deleteR2Video(id);
+      setR2Videos((prev) => prev.filter((v) => v.id !== id));
+      window.dispatchEvent(new CustomEvent("show-toast", {
+        detail: { title: "Deleted", message: `"${video.title}" deleted`, type: "success", duration: 2500 },
+      }));
+      await import("@/lib/haptics").then((m) => m.hapticSuccess());
+    } catch {
+      window.dispatchEvent(new CustomEvent("show-toast", {
+        detail: { title: "Error", message: "Failed to delete video", type: "error", duration: 3000 },
+      }));
+    }
+    setDeleteR2Target(null);
+  }
+
+  // Schedule video ID selection
+  function toggleR2ScheduleVideo(videoId: string) {
+    setR2ScheduleVideoIds((prev) =>
+      prev.includes(videoId) ? prev.filter((id) => id !== videoId) : [...prev, videoId]
+    );
+  }
+
+  function moveR2ScheduleVideo(index: number, direction: -1 | 1) {
+    setR2ScheduleVideoIds((prev) => {
+      const next = [...prev];
+      const target = index + direction;
+      if (target < 0 || target >= next.length) return prev;
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  }
+
+  async function handleSaveR2Schedule() {
+    if (!r2ScheduleName.trim()) {
+      window.dispatchEvent(new CustomEvent("show-toast", {
+        detail: { title: "Name Required", message: "Enter a name for this schedule", type: "error", duration: 3000 },
+      }));
+      return;
+    }
+    if (r2ScheduleVideoIds.length === 0) {
+      window.dispatchEvent(new CustomEvent("show-toast", {
+        detail: { title: "No Videos", message: "Add at least one video to the schedule", type: "error", duration: 3000 },
+      }));
+      return;
+    }
+    setR2ScheduleSaving(true);
+    try {
+      await addR2TvPlaylist({
+        title: r2ScheduleName.trim(),
+        videoIds: r2ScheduleVideoIds,
+        currentIndex: r2ScheduleStartIndex,
+        isActive: true,
+      });
+      await fetchR2Playlists();
+      setShowR2ScheduleForm(false);
+      setR2ScheduleName("");
+      setR2ScheduleVideoIds([]);
+      setR2ScheduleStartIndex(0);
+      window.dispatchEvent(new CustomEvent("show-toast", {
+        detail: { title: "Schedule Created", message: `"${r2ScheduleName.trim()}" saved with ${r2ScheduleVideoIds.length} videos`, type: "success", duration: 3000 },
+      }));
+    } catch {
+      window.dispatchEvent(new CustomEvent("show-toast", {
+        detail: { title: "Error", message: "Could not save schedule", type: "error", duration: 3000 },
+      }));
+    }
+    setR2ScheduleSaving(false);
+  }
+
+  async function handleDeleteR2Schedule(id: string) {
+    setR2ScheduleDeleting(id);
+    try {
+      await deleteR2TvPlaylist(id);
+      setR2Playlists((prev) => prev.filter((p) => p.id !== id));
+      window.dispatchEvent(new CustomEvent("show-toast", {
+        detail: { title: "Removed", message: "Schedule deleted", type: "success", duration: 2500 },
+      }));
+    } catch {
+      window.dispatchEvent(new CustomEvent("show-toast", {
+        detail: { title: "Error", message: "Could not delete schedule", type: "error", duration: 3000 },
+      }));
+    }
+    setR2ScheduleDeleting(null);
+  }
+
+  function formatDuration(seconds: number): string {
+    if (!seconds) return "--:--";
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    return `${m}:${String(s).padStart(2, "0")}`;
+  }
+
+  function getVideoColor(cat: string): string {
+    const colors: Record<string, string> = {
+      sermon: "#E8A838",
+      worship: "#8B5CF6",
+      event: "#3B82F6",
+      announcement: "#4ADE80",
+      teaching: "#EF4444",
+      testimony: "#F59E0B",
+    };
+    return colors[cat] || "#6B6B6B";
+  }
+
+  function formatFileSize(bytes: number): string {
+    if (bytes === 0) return "0 B";
+    const units = ["B", "KB", "MB", "GB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return (bytes / Math.pow(1024, i)).toFixed(1) + " " + units[i];
+  }
+
+  // ========== RENDER VIDEOS TAB ==========
+
+  function renderVideosTab() {
+    const sortedVideos = [...r2Videos].sort((a, b) => {
+      const aTime = (a.uploadedAt as any)?.toMillis?.() || 0;
+      const bTime = (b.uploadedAt as any)?.toMillis?.() || 0;
+      return bTime - aTime;
+    });
+
+    return (
+      <>
+        {/* ─── Upload Section ─── */}
+        <div style={{ padding: "12px 16px" }}>
+          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
+            <i className="fas fa-cloud-arrow-up" style={{ color: "var(--primary)" }}></i>
+            Upload Video to R2
+          </div>
+
+          {!r2SelectedFile ? (
+            <div
+              className="upload-zone"
+              onClick={() => document.getElementById("r2-video-input")?.click()}
+              style={{ marginBottom: 0 }}
+            >
+              <div className="upload-zone-icon"><i className="fas fa-video"></i></div>
+              <div className="upload-zone-title">Tap to select a video file</div>
+              <div className="upload-zone-sub">MP4, WebM, OGG — up to 5GB (presigned URL upload)</div>
+            </div>
+          ) : (
+            <div style={{
+              background: "var(--surface-card)", border: "1px solid var(--border)",
+              borderRadius: "var(--radius-lg)", padding: 16,
+              display: "flex", flexDirection: "column", gap: 12,
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <div style={{
+                  width: 48, height: 48, borderRadius: 10,
+                  background: "linear-gradient(135deg, rgba(232,168,56,0.12), rgba(232,168,56,0.04))",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 20, color: "var(--primary)", flexShrink: 0,
+                }}>
+                  <i className="fas fa-file-video"></i>
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {r2SelectedFile.name}
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 2 }}>
+                    {formatFileSize(r2SelectedFile.size)}
+                  </div>
+                </div>
+                <button
+                  onClick={() => setR2SelectedFile(null)}
+                  style={{
+                    width: 28, height: 28, borderRadius: "50%",
+                    background: "rgba(239,68,68,0.1)", border: "none",
+                    color: "var(--error)", fontSize: 12, cursor: "pointer",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                  }}
+                >
+                  <i className="fas fa-xmark"></i>
+                </button>
+              </div>
+
+              {/* Upload progress bar */}
+              {r2Uploading && (
+                <div style={{ width: "100%", height: 4, background: "var(--surface-elevated)", borderRadius: 2, overflow: "hidden" }}>
+                  <div style={{ width: `${r2UploadProgress}%`, height: "100%", background: "linear-gradient(90deg, var(--gradient-start), var(--gradient-end))", borderRadius: 2, transition: "width 0.3s" }}></div>
+                </div>
+              )}
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label"><i className="fas fa-tag"></i> Title</label>
+                <input
+                  className="form-input"
+                  type="text"
+                  placeholder="Video title"
+                  value={r2VideoTitle}
+                  onChange={(e) => setR2VideoTitle(e.target.value)}
+                  disabled={r2Uploading}
+                />
+              </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label"><i className="fas fa-align-left"></i> Description (optional)</label>
+                <textarea
+                  className="form-input"
+                  style={{ minHeight: 60, fontFamily: "inherit", resize: "vertical" }}
+                  placeholder="Brief description"
+                  value={r2VideoDesc}
+                  onChange={(e) => setR2VideoDesc(e.target.value)}
+                  rows={2}
+                  disabled={r2Uploading}
+                />
+              </div>
+              <div style={{ display: "flex", gap: 12 }}>
+                <div className="form-group" style={{ marginBottom: 0, flex: 1 }}>
+                  <label className="form-label"><i className="fas fa-tag"></i> Category</label>
+                  <select
+                    className="form-input"
+                    value={r2VideoCategory}
+                    onChange={(e) => setR2VideoCategory(e.target.value)}
+                    disabled={r2Uploading}
+                  >
+                    <option value="sermon">Sermon</option>
+                    <option value="worship">Worship</option>
+                    <option value="event">Event</option>
+                    <option value="announcement">Announcement</option>
+                    <option value="teaching">Teaching</option>
+                    <option value="testimony">Testimony</option>
+                  </select>
+                </div>
+                <div className="form-group" style={{ marginBottom: 0, flex: 1 }}>
+                  <label className="form-label"><i className="fas fa-clock"></i> Duration (sec)</label>
+                  <input
+                    className="form-input"
+                    type="number"
+                    placeholder="0"
+                    value={r2VideoDuration || ""}
+                    onChange={(e) => setR2VideoDuration(parseInt(e.target.value) || 0)}
+                    min={0}
+                    disabled={r2Uploading}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: 10 }}>
+                <button
+                  className="btn-outline small"
+                  onClick={() => setR2SelectedFile(null)}
+                  disabled={r2Uploading}
+                  style={{ flex: 1 }}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="btn-primary small"
+                  onClick={handleR2Upload}
+                  disabled={r2Uploading || !r2VideoTitle.trim()}
+                  style={{ flex: 1 }}
+                >
+                  {r2Uploading ? (
+                    <><i className="fas fa-spinner fa-spin"></i> Uploading ({r2UploadProgress}%)</>
+                  ) : (
+                    <><i className="fas fa-cloud-arrow-up"></i> Upload to R2</>
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
+
+          <input
+            id="r2-video-input"
+            type="file"
+            accept="video/mp4,video/webm,video/ogg,video/quicktime"
+            style={{ display: "none" }}
+            onChange={handleR2FileSelect}
+          />
+        </div>
+
+        <div style={{ borderTop: "1px solid var(--border)", margin: "8px 16px" }}></div>
+
+        {/* ─── Video Library ─── */}
+        <div style={{ padding: "8px 16px" }}>
+          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
+            <i className="fas fa-video" style={{ color: "var(--primary)" }}></i>
+            Video Library ({r2Videos.length})
+          </div>
+
+          {r2VideosLoading ? (
+            <div className="loading-state"><i className="fas fa-spinner fa-spin"></i><span>Loading videos...</span></div>
+          ) : sortedVideos.length === 0 ? (
+            <div className="empty-state" style={{ padding: "32px 0" }}>
+              <div className="empty-state-icon"><i className="fas fa-video-slash"></i></div>
+              <h3>No videos uploaded yet</h3>
+              <p>Upload MP4 files to R2 storage above</p>
+            </div>
+          ) : (
+            <div className="tv-grid">
+              {sortedVideos.map((video) => (
+                <div key={video.id} className="tv-grid-card" onClick={() => openEditR2Video(video)}>
+                  <div className="tv-grid-card-thumb">
+                    {video.thumbnail ? (
+                      <img src={video.thumbnail} alt={video.title} loading="lazy" />
+                    ) : (
+                      <div style={{
+                        width: "100%", height: "100%",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        background: "linear-gradient(135deg, rgba(232,168,56,0.08), rgba(232,168,56,0.02))",
+                        fontSize: 28, color: "var(--text-tertiary)", opacity: 0.5,
+                      }}>
+                        <i className="fas fa-video"></i>
+                      </div>
+                    )}
+                    {video.duration > 0 && (
+                      <div className="tv-grid-card-duration">{formatDuration(video.duration)}</div>
+                    )}
+                    {video.isFeatured && <div className="tv-grid-card-badge featured"><i className="fas fa-star"></i></div>}
+                    {video.isHidden && <div className="tv-grid-card-badge hidden"><i className="fas fa-eye-slash"></i></div>}
+                  </div>
+                  <div className="tv-grid-card-info">
+                    <div className="tv-grid-card-title">{video.title}</div>
+                    <div className="tv-grid-card-meta" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ color: getVideoColor(video.category), fontWeight: 600 }}>{video.category}</span>
+                      <span>·</span>
+                      <span>{formatFileSize(video.fileSize)}</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div style={{ borderTop: "1px solid var(--border)", margin: "16px 16px 8px" }}></div>
+
+        {/* ─── Schedule for TV ─── */}
+        <div style={{ padding: "8px 16px 40px" }}>
+          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
+            <i className="fas fa-calendar-clock" style={{ color: "var(--primary)" }}></i>
+            Schedule for TV
+          </div>
+
+          <button
+            className="btn-outline small"
+            onClick={() => setShowR2ScheduleForm(!showR2ScheduleForm)}
+          >
+            <i className={`fas fa-${showR2ScheduleForm ? "minus" : "plus"}`}></i>
+            {showR2ScheduleForm ? "Cancel" : "Create TV Schedule"}
+          </button>
+
+          {showR2ScheduleForm && (
+            <div className="pl-builder" style={{ marginTop: 10 }}>
+              <div className="form-group">
+                <label className="form-label"><i className="fas fa-tag"></i> Schedule Name</label>
+                <input className="form-input" type="text" placeholder="e.g. Sunday Service" value={r2ScheduleName} onChange={(e) => setR2ScheduleName(e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label className="form-label"><i className="fas fa-play"></i> Start From</label>
+                <div style={{ fontSize: 12, color: "var(--text-tertiary)", marginBottom: 8 }}>
+                  Which video in the order should playback start from? (0 = first video)
+                </div>
+                <select
+                  className="form-input"
+                  value={r2ScheduleStartIndex}
+                  onChange={(e) => setR2ScheduleStartIndex(parseInt(e.target.value) || 0)}
+                >
+                  {r2ScheduleVideoIds.length === 0 ? (
+                    <option value={0}>Video #1 (add videos first)</option>
+                  ) : (
+                    r2ScheduleVideoIds.map((id, i) => {
+                      const v = r2Videos.find((vid) => vid.id === id);
+                      return (
+                        <option key={id} value={i}>
+                          Video #{i + 1}{v ? `: ${v.title}` : ""}
+                        </option>
+                      );
+                    })
+                  )}
+                </select>
+              </div>
+
+              {/* Selected videos for schedule */}
+              <div className="pl-selected-header">
+                <span><i className="fas fa-video"></i> Videos in schedule ({r2ScheduleVideoIds.length})</span>
+              </div>
+              {r2ScheduleVideoIds.length === 0 ? (
+                <div style={{ padding: "12px 0", textAlign: "center", fontSize: 12, color: "var(--text-tertiary)" }}>
+                  No videos selected. Tap videos below to add them to this schedule.
+                </div>
+              ) : (
+                <div className="pl-selected-list">
+                  {r2ScheduleVideoIds.map((id, i) => {
+                    const v = r2Videos.find((vid) => vid.id === id);
+                    return (
+                      <div key={id} className="pl-selected-item">
+                        <div className="pl-selected-thumb" style={{
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          background: "linear-gradient(135deg, rgba(232,168,56,0.1), rgba(232,168,56,0.04))",
+                          fontSize: 14, color: "var(--primary)",
+                        }}>
+                          <i className="fas fa-video"></i>
+                        </div>
+                        <div className="pl-selected-title">{v?.title || id}</div>
+                        <div className="pl-selected-pos">
+                          <button onClick={() => moveR2ScheduleVideo(i, -1)} disabled={i === 0} style={{ opacity: i === 0 ? 0.3 : 1 }}>
+                            <i className="fas fa-chevron-up"></i>
+                          </button>
+                          <button onClick={() => moveR2ScheduleVideo(i, 1)} disabled={i >= r2ScheduleVideoIds.length - 1} style={{ opacity: i >= r2ScheduleVideoIds.length - 1 ? 0.3 : 1 }}>
+                            <i className="fas fa-chevron-down"></i>
+                          </button>
+                        </div>
+                        <button className="pl-selected-remove" onClick={() => toggleR2ScheduleVideo(id)}>
+                          <i className="fas fa-xmark"></i>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Browse videos to add */}
+              {r2Videos.length > 0 && (
+                <>
+                  <div className="pl-selected-header" style={{ marginTop: 4 }}>
+                    <span><i className="fas fa-list"></i> Browse Uploaded Videos</span>
+                  </div>
+                  <div className="pl-browse-grid" style={{ maxHeight: 200 }}>
+                    {r2Videos.map((v) => {
+                      const isAdded = r2ScheduleVideoIds.includes(v.id);
+                      return (
+                        <div
+                          key={v.id}
+                          className={`pl-browse-item ${isAdded ? "added" : ""}`}
+                          onClick={() => !isAdded && toggleR2ScheduleVideo(v.id)}
+                        >
+                          <div className="pl-browse-thumb" style={{
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                            background: "linear-gradient(135deg, rgba(232,168,56,0.08), rgba(232,168,56,0.02))",
+                            fontSize: 16, color: "var(--text-tertiary)", opacity: 0.6,
+                          }}>
+                            <i className="fas fa-video"></i>
+                          </div>
+                          <div className="pl-browse-info">
+                            <div className="pl-browse-title">{v.title}</div>
+                            <div className="pl-browse-meta">{formatDuration(v.duration)} · {v.category}</div>
+                          </div>
+                          <div className={`pl-browse-add ${isAdded ? "added" : ""}`}>
+                            <i className={`fas fa-${isAdded ? "check" : "plus"}`}></i>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+
+              <button
+                className="btn-primary small"
+                onClick={handleSaveR2Schedule}
+                disabled={r2ScheduleSaving || !r2ScheduleName.trim() || r2ScheduleVideoIds.length === 0}
+              >
+                {r2ScheduleSaving ? (
+                  <><i className="fas fa-spinner fa-spin"></i> Saving...</>
+                ) : (
+                  <><i className="fas fa-save"></i> Save TV Schedule</>
+                )}
+              </button>
+            </div>
+          )}
+
+          {/* Scheduled playlists list */}
+          {r2PlaylistsLoading ? (
+            <div className="loading-state" style={{ padding: "20px 0" }}><i className="fas fa-spinner fa-spin"></i></div>
+          ) : r2Playlists.length === 0 ? (
+            <div style={{ padding: "16px 0", textAlign: "center", fontSize: 13, color: "var(--text-tertiary)" }}>
+              No TV schedules yet. Create one above to arrange videos in playback order.
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
+              {r2Playlists.map((p) => {
+                return (
+                  <div key={p.id} className="preview-card" style={{ alignItems: "center" }}>
+                    <div style={{
+                      width: 40, height: 40, borderRadius: 10, flexShrink: 0,
+                      background: "linear-gradient(135deg, rgba(232,168,56,0.12), rgba(232,168,56,0.04))",
+                      border: "1px solid rgba(232,168,56,0.12)",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      fontSize: 16, color: "var(--primary)",
+                    }}>
+                      <i className="fas fa-list-ol"></i>
+                    </div>
+                    <div className="preview-info" style={{ flex: 1 }}>
+                      <div className="preview-title">{p.title}</div>
+                      <div className="preview-meta">
+                        <i className="fas fa-play"></i> Start: Video #{p.currentIndex + 1}
+                        <span style={{ marginLeft: 8 }}>· {p.videoIds.length} videos</span>
+                      </div>
+                    </div>
+                    <button style={{
+                      width: 32, height: 32, borderRadius: 8,
+                      border: "1px solid var(--border)", background: "var(--surface)",
+                      color: "var(--error)", fontSize: 13, cursor: "pointer",
+                      display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                    }} onClick={() => handleDeleteR2Schedule(p.id)} disabled={r2ScheduleDeleting === p.id}>
+                      {r2ScheduleDeleting === p.id ? (
+                        <i className="fas fa-spinner fa-spin" style={{ fontSize: 12 }}></i>
+                      ) : (
+                        <i className="fas fa-xmark"></i>
+                      )}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* ─── TV Bumper Animation ─── */}
+        <div style={{ borderTop: "1px solid var(--border)", margin: "16px 16px 8px" }}></div>
+        <div style={{ padding: "8px 16px 40px" }}>
+          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
+            <i className="fas fa-clapperboard" style={{ color: "var(--primary)" }}></i>
+            TV Bumper Animation
+          </div>
+          <div style={{ fontSize: 12, color: "var(--text-tertiary)", marginBottom: 12, lineHeight: 1.5 }}>
+            The bumper is a short logo animation that plays when users open the TV page and interrupts every 15 minutes during playback. Select a short video (3–10 seconds) from your uploaded videos below.
+          </div>
+
+          {r2BumperLoading ? (
+            <div className="loading-state" style={{ padding: "16px 0" }}><i className="fas fa-spinner fa-spin"></i></div>
+          ) : (
+            <>
+              <div style={{
+                padding: 16, borderRadius: "var(--radius-md)",
+                background: "var(--surface-card)", border: "1px solid var(--border)",
+                display: "flex", flexDirection: "column", gap: 12,
+              }}>
+                {/* Current bumper status */}
+                {r2BumperConfig ? (
+                  <div style={{
+                    display: "flex", alignItems: "center", gap: 12,
+                    padding: 10, borderRadius: "var(--radius-sm)",
+                    background: "rgba(232,168,56,0.06)", border: "1px solid rgba(232,168,56,0.12)",
+                  }}>
+                    <div style={{
+                      width: 40, height: 40, borderRadius: 8,
+                      background: "linear-gradient(135deg, rgba(232,168,56,0.12), rgba(232,168,56,0.04))",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      fontSize: 18, color: "var(--primary)", flexShrink: 0,
+                    }}>
+                      <i className="fas fa-check-circle"></i>
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600 }}>{r2BumperConfig.r2VideoTitle}</div>
+                      <div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>Active bumper animation</div>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        if (!window.confirm("Remove the TV bumper animation?")) return;
+                        setR2BumperSaving(true);
+                        try {
+                          await clearTvBumperConfig();
+                          setR2BumperConfig(null);
+                          setR2BumperSelectedId("");
+                          window.dispatchEvent(new CustomEvent("show-toast", {
+                            detail: { title: "Bumper Removed", message: "TV bumper animation cleared", type: "success", duration: 2500 },
+                          }));
+                        } catch {}
+                        setR2BumperSaving(false);
+                      }}
+                      style={{
+                        width: 28, height: 28, borderRadius: "50%",
+                        background: "rgba(239,68,68,0.08)", border: "none",
+                        color: "var(--error)", fontSize: 12, cursor: "pointer",
+                        display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                      }}
+                    >
+                      <i className="fas fa-xmark"></i>
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{
+                    display: "flex", alignItems: "center", gap: 10,
+                    padding: 10, borderRadius: "var(--radius-sm)",
+                    border: "1px dashed var(--border)",
+                  }}>
+                    <i className="fas fa-circle-info" style={{ color: "var(--text-tertiary)", fontSize: 14 }}></i>
+                    <span style={{ fontSize: 13, color: "var(--text-tertiary)" }}>No bumper set. Select a video below and save.</span>
+                  </div>
+                )}
+
+                {/* Bumper video selector */}
+                {r2Videos.length > 0 && (
+                  <>
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label className="form-label"><i className="fas fa-video"></i> Select Bumper Video</label>
+                      <select
+                        className="form-input"
+                        value={r2BumperSelectedId}
+                        onChange={(e) => setR2BumperSelectedId(e.target.value)}
+                      >
+                        <option value="">— Choose a video —</option>
+                        {r2Videos.filter((v) => !v.isHidden).map((v) => (
+                          <option key={v.id} value={v.id}>
+                            {v.title} {v.duration > 0 ? `(${formatDuration(v.duration)})` : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Preview selected bumper video */}
+                    {r2BumperSelectedId && (() => {
+                      const v = r2Videos.find((vid) => vid.id === r2BumperSelectedId);
+                      if (!v) return null;
+                      const isSame = r2BumperConfig?.r2VideoId === v.id;
+                      return (
+                        <div style={{
+                          display: "flex", alignItems: "center", gap: 12,
+                          padding: 10, borderRadius: "var(--radius-sm)",
+                          background: "var(--surface)", border: "1px solid var(--border)",
+                        }}>
+                          <div className="pl-selected-thumb" style={{
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                            background: "linear-gradient(135deg, rgba(232,168,56,0.1), rgba(232,168,56,0.04))",
+                            fontSize: 18, color: "var(--primary)", width: 48, height: 32,
+                          }}>
+                            <i className="fas fa-video"></i>
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 12, fontWeight: 600 }}>{v.title}</div>
+                            <div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>
+                              {formatDuration(v.duration)} · {v.category}
+                            </div>
+                          </div>
+                          {isSame ? (
+                            <span style={{ fontSize: 11, fontWeight: 600, color: "var(--success)" }}>
+                              <i className="fas fa-check"></i> Active
+                            </span>
+                          ) : null}
+                        </div>
+                      );
+                    })()}
+
+                    <button
+                      className="btn-primary small"
+                      onClick={async () => {
+                        if (!r2BumperSelectedId) return;
+                        const v = r2Videos.find((vid) => vid.id === r2BumperSelectedId);
+                        if (!v) return;
+                        setR2BumperSaving(true);
+                        try {
+                          await saveTvBumperConfig({
+                            r2VideoId: v.id,
+                            r2VideoUrl: v.url,
+                            r2VideoTitle: v.title,
+                          });
+                          setR2BumperConfig({
+                            r2VideoId: v.id,
+                            r2VideoUrl: v.url,
+                            r2VideoTitle: v.title,
+                            updatedAt: null,
+                          });
+                          window.dispatchEvent(new CustomEvent("show-toast", {
+                            detail: { title: "Bumper Set!", message: `"${v.title}" will play on TV entry and every 15 minutes`, type: "success", duration: 3000 },
+                          }));
+                        } catch {
+                          window.dispatchEvent(new CustomEvent("show-toast", {
+                            detail: { title: "Error", message: "Could not save bumper config", type: "error", duration: 3000 },
+                          }));
+                        }
+                        setR2BumperSaving(false);
+                      }}
+                      disabled={r2BumperSaving || !r2BumperSelectedId}
+                    >
+                      {r2BumperSaving ? (
+                        <><i className="fas fa-spinner fa-spin"></i> Saving...</>
+                      ) : (
+                        <><i className="fas fa-save"></i> Set as TV Bumper</>
+                      )}
+                    </button>
+                  </>
+                )}
+
+                {r2Videos.length === 0 && (
+                  <div style={{ padding: "8px 0", fontSize: 12, color: "var(--text-tertiary)", textAlign: "center" }}>
+                    Upload a short video above first to use as the bumper animation.
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* ─── Edit Video Modal ─── */}
+        {editR2Video && (
+          <div className="modal-overlay active" onClick={() => setEditR2Video(null)}>
+            <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-handle"></div>
+              <div className="modal-header">
+                <h2>Edit Video</h2>
+                <p>Update video metadata</p>
+              </div>
+              <div className="modal-body">
+                <div className="form-group">
+                  <label>Title</label>
+                  <input className="form-input" type="text" value={editR2Title} onChange={(e) => setEditR2Title(e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label>Description</label>
+                  <textarea className="form-textarea" value={editR2Desc} onChange={(e) => setEditR2Desc(e.target.value)} rows={3} />
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Category</label>
+                    <select className="form-select" value={editR2Category} onChange={(e) => setEditR2Category(e.target.value)}>
+                      <option value="sermon">Sermon</option>
+                      <option value="worship">Worship</option>
+                      <option value="event">Event</option>
+                      <option value="announcement">Announcement</option>
+                      <option value="teaching">Teaching</option>
+                      <option value="testimony">Testimony</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label>Duration (sec)</label>
+                    <input className="form-input" type="number" value={editR2Duration || ""} onChange={(e) => setEditR2Duration(parseInt(e.target.value) || 0)} min={0} />
+                  </div>
+                </div>
+                <div className="toggle-row">
+                  <span className="toggle-label">Featured</span>
+                  <button className={`toggle-switch ${editR2Featured ? "on" : "off"}`} onClick={() => setEditR2Featured(!editR2Featured)}></button>
+                </div>
+                <div className="toggle-row">
+                  <span className="toggle-label">Hidden</span>
+                  <button className={`toggle-switch ${editR2Hidden ? "on" : "off"}`} onClick={() => setEditR2Hidden(!editR2Hidden)}></button>
+                </div>
+
+                {/* Delete button */}
+                <button
+                  className="btn-danger"
+                  style={{ marginTop: 12 }}
+                  onClick={() => { setDeleteR2Target(editR2Video.id); setEditR2Video(null); }}
+                >
+                  <i className="fas fa-trash"></i> Delete Video
+                </button>
+              </div>
+              <div className="modal-footer">
+                <button className="btn-secondary" onClick={() => setEditR2Video(null)}>Cancel</button>
+                <button className="btn-primary" onClick={handleSaveR2Video} disabled={editSaving || !editR2Title.trim()}>
+                  {editSaving ? (
+                    <><i className="fas fa-spinner fa-spin"></i> Saving...</>
+                  ) : (
+                    <><i className="fas fa-save"></i> Save Changes</>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ─── Delete Video Confirmation ─── */}
+        {deleteR2Target && (
+          <div className="modal-overlay active" onClick={() => setDeleteR2Target(null)}>
+            <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-handle"></div>
+              <div className="modal-header">
+                <h2>Delete Video</h2>
+                <p>This will permanently remove the video from R2 storage and all schedules.</p>
+              </div>
+              <div className="modal-body">
+                <div className="delete-confirm-text">
+                  Are you sure you want to delete <strong>{r2Videos.find((v) => v.id === deleteR2Target)?.title}</strong>?
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button className="btn-secondary" onClick={() => setDeleteR2Target(null)}>Cancel</button>
+                <button className="btn-danger" onClick={() => handleDeleteR2Video(deleteR2Target)}>
+                  <i className="fas fa-trash"></i> Delete Permanently
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </>
+    );
+  }
+
   return (
     <>
       <style>{`
@@ -1048,10 +2177,103 @@ export default function AdminContentPage() {
           display: flex; align-items: center;
           justify-content: center; z-index: 2;
         }
+
+        /* ========== R2 VIDEO GRID ========== */\n        .tv-grid {\n          display: grid;\n          grid-template-columns: 1fr 1fr;\n          gap: 12px;\n        }\n        .tv-grid-card {\n          background: var(--surface-card);\n          border: 1px solid var(--border);\n          border-radius: var(--radius-md);\n          overflow: hidden;\n          transition: all 0.2s ease;\n        }\n        .tv-grid-card:active { transform: scale(0.97); background: var(--surface-elevated); }\n        .tv-grid-card-thumb {\n          position: relative;\n          aspect-ratio: 16 / 9;\n          background: var(--surface-elevated);\n          overflow: hidden;\n        }\n        .tv-grid-card-thumb img {\n          width: 100%; height: 100%; object-fit: cover;\n        }\n        .tv-grid-card-duration {\n          position: absolute; bottom: 6px; right: 6px;\n          padding: 2px 6px; border-radius: 4px;\n          background: rgba(0,0,0,0.8); color: #fff;\n          font-size: 10px; font-weight: 700;\n          letter-spacing: 0.3px;\n        }\n        .tv-grid-card-badge {\n          position: absolute; top: 6px; left: 6px;\n          width: 24px; height: 24px; border-radius: 50%;\n          display: flex; align-items: center; justify-content: center;\n          font-size: 10px; backdrop-filter: blur(4px);\n        }\n        .tv-grid-card-badge.featured {\n          background: rgba(232,168,56,0.85); color: #fff;\n        }\n        .tv-grid-card-badge.hidden {\n          background: rgba(107,107,107,0.85); color: #fff;\n        }\n        .tv-grid-card-info {\n          padding: 8px 10px 10px;\n        }\n        .tv-grid-card-title {\n          font-size: 12px; font-weight: 600;\n          display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;\n          overflow: hidden; line-height: 1.4;\n        }\n        .tv-grid-card-meta {\n          font-size: 10px; color: var(--text-tertiary);\n          margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;\n        }
         .event-image-clear-btn:active {
           background: rgba(255,255,255,0.2);
         }
         .load-more-btn:active { background: var(--surface-elevated); }
+
+        /* ========== SCHEDULE UI FOR VIDEOS TAB ========== */
+        .btn-outline {
+          width: 100%; padding: 14px;
+          border-radius: var(--radius-md); font-size: 14px; font-weight: 600;
+          border: 1.5px solid var(--border); cursor: pointer; transition: all 0.2s ease;
+          background: var(--surface); color: var(--text-secondary);
+          display: flex; align-items: center; justify-content: center; gap: 8px;
+        }
+        .btn-outline:active { background: var(--surface-elevated); transform: scale(0.97); }
+        .btn-outline.small { padding: 8px 12px; font-size: 12px; width: auto; }
+        .pl-builder {
+          background: var(--surface-card); border: 1px solid var(--border);
+          border-radius: var(--radius-lg); padding: 16px;
+          display: flex; flex-direction: column; gap: 12px;
+        }
+        .pl-selected-header {
+          display: flex; align-items: center; justify-content: space-between;
+          font-size: 13px; font-weight: 600; color: var(--text-secondary);
+          padding-bottom: 8px; border-bottom: 1px solid var(--border);
+        }
+        .pl-selected-list {
+          display: flex; flex-direction: column; gap: 6px;
+          max-height: 200px; overflow-y: auto;
+        }
+        .pl-selected-item {
+          display: flex; align-items: center; gap: 8px;
+          padding: 6px 8px; border-radius: var(--radius-sm);
+          background: var(--surface); border: 1px solid var(--border);
+        }
+        .pl-selected-thumb {
+          width: 40px; height: 26px; border-radius: 4px; overflow: hidden; flex-shrink: 0;
+          background: var(--surface-elevated);
+        }
+        .pl-selected-thumb img { width: 100%; height: 100%; object-fit: cover; }
+        .pl-selected-title { flex: 1; min-width: 0; font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .pl-selected-pos {
+          display: flex; gap: 2px;
+        }
+        .pl-selected-pos button {
+          width: 24px; height: 24px; border-radius: 6px;
+          background: var(--surface-elevated); border: 1px solid var(--border);
+          color: var(--text-tertiary); font-size: 10px;
+          cursor: pointer; display: flex; align-items: center; justify-content: center;
+        }
+        .pl-selected-pos button:active { background: var(--surface-hover); }
+        .pl-selected-remove {
+          width: 24px; height: 24px; border-radius: 6px;
+          background: transparent; border: none;
+          color: var(--error); font-size: 12px;
+          cursor: pointer; display: flex; align-items: center; justify-content: center;
+        }
+        .pl-browse-grid {
+          display: flex; flex-direction: column; gap: 6px;
+          max-height: 240px; overflow-y: auto;
+        }
+        .pl-browse-item {
+          display: flex; align-items: center; gap: 10px;
+          padding: 8px 10px; border-radius: var(--radius-sm);
+          background: var(--surface); border: 1px solid var(--border);
+          cursor: pointer; transition: all 0.15s;
+        }
+        .pl-browse-item:active { background: var(--surface-elevated); }
+        .pl-browse-item.added { border-color: var(--success); opacity: 0.6; }
+        .pl-browse-thumb {
+          width: 50px; height: 30px; border-radius: 4px; overflow: hidden; flex-shrink: 0;
+          background: var(--surface-elevated);
+        }
+        .pl-browse-thumb img { width: 100%; height: 100%; object-fit: cover; }
+        .pl-browse-info { flex: 1; min-width: 0; }
+        .pl-browse-title { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .pl-browse-meta { font-size: 10px; color: var(--text-tertiary); margin-top: 1px; }
+        .pl-browse-add {
+          width: 28px; height: 28px; border-radius: 8px;
+          background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+          border: none; color: #fff; font-size: 11px;
+          cursor: pointer; display: flex; align-items: center; justify-content: center;
+          flex-shrink: 0;
+        }
+        .pl-browse-add:active { transform: scale(0.9); }
+        .pl-browse-add.added { background: var(--surface-elevated); color: var(--success); }
+        .preview-card {
+          background: var(--surface-card); border: 1px solid var(--border);
+          border-radius: var(--radius-lg); overflow: hidden;
+          display: flex; gap: 12px; padding: 12px;
+          transition: all 0.2s;
+        }
+        .preview-card:active { background: var(--surface-elevated); }
+        .preview-info { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+        .preview-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .preview-meta { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
 
         /* ========== PREMIUM EVENT CARDS ========== */
         .event-pcard {
@@ -1328,8 +2550,8 @@ export default function AdminContentPage() {
           <button className={`tab-btn${activeTab === "events" ? " active" : ""}`} onClick={() => setActiveTab("events")}>
             <i className="fas fa-calendar-alt"></i> Events
           </button>
-          <button className={`tab-btn${activeTab === "settings" ? " active" : ""}`} onClick={() => setActiveTab("settings")}>
-            <i className="fas fa-gear"></i> Settings
+          <button className={`tab-btn${activeTab === "videos" ? " active" : ""}`} onClick={() => setActiveTab("videos")}>
+            <i className="fas fa-video"></i> Videos
           </button>
         </div>
 
@@ -1631,109 +2853,7 @@ export default function AdminContentPage() {
           )}
 
           {/* ===== TAB 4: SETTINGS ===== */}
-          {activeTab === "settings" && (
-            <div className="settings-section" style={{ paddingTop: 16, paddingBottom: 40 }}>
-              {/* BunnyCDN Config */}
-              <div className="settings-group">
-                <div className="settings-group-title"><i className="fas fa-database"></i> Storage Configuration</div>
-                <div className="settings-row">
-                  <div>
-                    <div className="settings-label">Storage Zone</div>
-                    <small style={{ fontSize: 11, color: "var(--text-tertiary)" }}>histoview</small>
-                  </div>
-                </div>
-                <div className="settings-row">
-                  <div className="settings-label">CDN Base URL <small>Copied to clipboard on tap</small></div>
-                  <div className="settings-value" style={{ fontSize: 12, maxWidth: "60%", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    <span>https://histoview.b-cdn.net/</span>
-                    <button className="settings-copy-btn" onClick={() => {
-                      navigator.clipboard.writeText("https://histoview.b-cdn.net/");
-                      window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Copied", message: "CDN URL copied to clipboard", type: "success", duration: 2000 } }));
-                    }}><i className="fas fa-copy"></i></button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Storage Breakdown */}
-              <div className="settings-group">
-                <div className="settings-group-title"><i className="fas fa-chart-pie"></i> Storage Usage</div>
-                <div className="settings-row" style={{ flexDirection: "column", alignItems: "stretch", gap: 4 }}>
-                  <div className="settings-label">Used: {storageUsage.formattedUsed} of {storageUsage.formattedTotal}</div>
-                  <div className="storage-bar-track" style={{ height: 8 }}>
-                    <div className="storage-bar-fill" style={{ width: `${storageUsage.percentUsed}%`, background: storageBarColor }}></div>
-                  </div>
-                </div>
-                <div className="storage-breakdown">
-                  {[
-                    { label: "Gallery", size: "1.2 GB", pct: 50, color: "#E8A838" },
-                    { label: "Banners", size: "0.3 GB", pct: 12.5, color: "#8B5CF6" },
-                    { label: "Other", size: "0.5 GB", pct: 20.8, color: "#6B6B6B" },
-                  ].map((item) => (
-                    <div className="storage-break-row" key={item.label}>
-                      <div className="storage-break-dot" style={{ background: item.color }}></div>
-                      <div className="storage-break-name">{item.label}</div>
-                      <div className="storage-break-bar"><div className="storage-break-fill" style={{ width: `${item.pct}%`, background: item.color }}></div></div>
-                      <div className="storage-break-size">{item.size}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Image Optimization */}
-              <div className="settings-group">
-                <div className="settings-group-title"><i className="fas fa-wand-magic"></i> Image Optimization</div>
-                <div className="toggle-row">
-                  <span className="toggle-label">Auto-compress on upload</span>
-                  <button className={`toggle-switch ${autoCompress ? "on" : "off"}`} onClick={() => setAutoCompress(!autoCompress)}></button>
-                </div>
-                <div className="settings-row">
-                  <span className="settings-label">Max width cap</span>
-                  <select className="settings-select" value={maxWidth} onChange={(e) => setMaxWidth(e.target.value)}>
-                    <option value="1920">1920px</option>
-                    <option value="1280">1280px</option>
-                    <option value="800">800px</option>
-                  </select>
-                </div>
-                <div className="settings-row">
-                  <span className="settings-label">Output format</span>
-                  <select className="settings-select" value={outputFormat} onChange={(e) => setOutputFormat(e.target.value)}>
-                    <option value="webp">WEBP (recommended)</option>
-                    <option value="original">Original</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Auto Cleanup */}
-              <div className="settings-group">
-                <div className="settings-group-title"><i className="fas fa-broom"></i> Cleanup</div>
-                <div className="toggle-row">
-                  <span className="toggle-label">Auto-delete expired banners</span>
-                  <button className={`toggle-switch ${autoDeleteExpired ? "on" : "off"}`} onClick={() => setAutoDeleteExpired(!autoDeleteExpired)}></button>
-                </div>
-              </div>
-
-              {/* Purge CDN */}
-              <div className="settings-group">
-                <div className="settings-group-title"><i className="fas fa-arrow-rotate-right"></i> Cache</div>
-                <button className="settings-purge-btn" onClick={() => setShowPurgeConfirm(true)}>
-                  <i className="fas fa-trash-can"></i> Purge CDN Cache
-                </button>
-                <p style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 8, textAlign: "center" }}>
-                  Clears BunnyCDN cache for all content. May take a few minutes to propagate.
-                </p>
-              </div>
-
-              {/* Danger Zone */}
-              <div className="settings-group" style={{ borderColor: "rgba(239,68,68,0.3)" }}>
-                <div className="settings-group-title" style={{ color: "var(--error)" }}><i className="fas fa-triangle-exclamation"></i> Danger Zone</div>
-                <button className="settings-danger-btn" onClick={() => {
-                  window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Disconnected", message: "YouTube channel disconnected from content manager", type: "warning", duration: 3000 } }));
-                }}>
-                  <i className="fas fa-unlink"></i> Disconnect YouTube Channel
-                </button>
-              </div>
-            </div>
-          )}
+          {activeTab === "videos" && renderVideosTab()}
 
         </div>
 
@@ -2183,38 +3303,6 @@ export default function AdminContentPage() {
           </div>
         </div>
 
-        {/* ========== PURGE CONFIRM ========== */}
-        <div className={`modal-overlay${showPurgeConfirm ? " active" : ""}`} onClick={(e) => { if (e.target === e.currentTarget) setShowPurgeConfirm(false); }}>
-          <div className="modal-sheet">
-            <div className="modal-handle"></div>
-            <div className="modal-header">
-              <h2>Purge CDN Cache</h2>
-              <p>Clears cached content across all edge servers</p>
-            </div>
-            <div className="modal-body">
-              <p className="delete-confirm-text" style={{ marginBottom: 8 }}>
-                This will clear the BunnyCDN cache for all content. Updates may take a few minutes to propagate globally.
-              </p>
-              <p style={{ textAlign: "center", fontSize: 13, color: "var(--text-tertiary)" }}>
-                Your files will not be deleted — only the cached copies will be cleared.
-              </p>
-            </div>
-            <div className="modal-footer" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              <button className="btn-primary" onClick={async () => {
-                setShowPurgeConfirm(false);
-                try {
-                  await apiFetch("/api/content/storage-stats", { method: "GET" }); // trigger once to warm
-                  window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Cache Purged", message: "CDN cache cleared — changes will propagate within minutes", type: "success", duration: 3000 } }));
-                } catch {
-                  window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Error", message: "Failed to purge cache", type: "error", duration: 3000 } }));
-                }
-              }}>Purge Cache</button>
-              <button className="btn-secondary" onClick={() => setShowPurgeConfirm(false)}>Cancel</button>
-            </div>
-          </div>
-        </div>
-
-        {/* ========== IMAGE VIEWER ========== */}
         {viewerIndex !== null && displayedEntryPhotos[viewerIndex] && (
           <div className="iv-overlay" onClick={closeViewer}>
             {/* Top bar */}

@@ -7,9 +7,12 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "build:apk": "bash build-apk.sh"
+    "build:apk": "bash build-apk.sh",
+    "build:release": "bash scripts/build-and-publish.sh"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1086.0",
+    "@aws-sdk/s3-request-presigner": "^3.1086.0",
     "@capacitor/android": "^8.4.1",
     "@capacitor/app": "^8.1.0",
     "@capacitor/browser": "^8.0.3",
@@ -47,6 +50,7 @@
     "qrcode": "^1.5.4",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "video.js": "^8.23.9",
     "vidstack": "^0.6.15",
     "zustand": "^5.0.14"
   },

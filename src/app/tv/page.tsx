@@ -24,6 +24,22 @@ import ToastBridge from "@/components/dashboard/ToastBridge";
 import BottomNavBar from "@/components/shared/BottomNavBar";
 import PremiumTopBar from "@/components/shared/PremiumTopBar";
 
+/* ─── TV localStorage key helpers — read uid at call time for logout resilience ─── */
+function getTvSeekKey(): string {
+  if (typeof window === "undefined") return "tv_resume_seek";
+  const uid = auth.currentUser?.uid;
+  return uid ? `tv_resume_seek_${uid}` : "tv_resume_seek";
+}
+function getTvIndexKey(): string {
+  if (typeof window === "undefined") return "tv_resume_index";
+  const uid = auth.currentUser?.uid;
+  return uid ? `tv_resume_index_${uid}` : "tv_resume_index";
+}
+function getTvCachedSeek(): number {
+  if (typeof window === "undefined") return 0;
+  return Number(localStorage.getItem(getTvSeekKey())) || 0;
+}
+
 /* ─── Helpers ──────────────────────────────────────────────── */
 
 function formatTime(seconds: number): string {
@@ -83,23 +99,13 @@ export default function TVPage() {
   // ─── User TV state (per-member playlist + progress) ───
   const [tvUserState, setTvUserState] = useState<UserTvState | null>(null);
   const [startTvCountdown, setStartTvCountdown] = useState<number | null>(null);
+  const [resumeCountdown, setResumeCountdown] = useState<number | null>(null);
   const lastTvSeekRef = useRef(0);
   const lastTvIndexRef = useRef(0);
 
-  // localStorage keys for instant cross-page resume (scoped by user UID)
-  const tvUid = auth.currentUser?.uid;
-  const TV_SEEK_KEY = tvUid ? `tv_resume_seek_${tvUid}` : "tv_resume_seek";
-  const TV_INDEX_KEY = tvUid ? `tv_resume_index_${tvUid}` : "tv_resume_index";
-
-  // One-time migration: clean up old non-UID-scoped keys
-  useEffect(() => {
-    if (tvUid && typeof window !== "undefined") {
-      localStorage.removeItem("tv_resume_seek");
-      localStorage.removeItem("tv_resume_index");
-    }
-  }, []);
-
-  const cachedSeek = typeof window !== "undefined" ? Number(localStorage.getItem(TV_SEEK_KEY)) || 0 : 0;
+  const cachedSeek = getTvCachedSeek();
+  // ─── Seek version — forces PlyrPlayer re-mount when Firestore loads a saved seek ───
+  const [seekVersion, setSeekVersion] = useState(0);
 
   const tvPlayer = useTvPlayer();
   const tvPlayerTargetRef = useCallback((el: HTMLDivElement | null) => {
@@ -223,19 +229,24 @@ export default function TVPage() {
     if (tvUserState) {
       lastTvIndexRef.current = tvUserState.currentIndex;
       if (typeof window !== "undefined") {
-        localStorage.setItem(TV_INDEX_KEY, String(tvUserState.currentIndex));
+        localStorage.setItem(getTvIndexKey(), String(tvUserState.currentIndex));
       }
     }
   }, [tvUserState?.currentIndex]);
 
   // Portal target registered via callback ref above — no useEffect needed.
 
-  // Call play() when current video changes
+  // Call play() when current video changes or seekVersion increments
+  // (seekVersion changes when Firestore loads a saved position different from localStorage)
   useEffect(() => {
     if (currentVideo) {
-      tvPlayer.play(currentVideo.id, currentSeek);
+      // Prefer Firestore seek, fall back to localStorage
+      const seek = (tvUserState && tvUserState.currentSeek > 0.1)
+        ? tvUserState.currentSeek
+        : cachedSeek > 0.1 ? cachedSeek : undefined;
+      tvPlayer.play(currentVideo.id, seek);
     }
-  }, [currentVideo?.id, currentSeek, tvPlayer]);
+  }, [currentVideo?.id, tvPlayer, seekVersion]);
 
   // ─── Initial load: fetch channel + user's TV state + only playlist videos ───
   useEffect(() => {
@@ -270,7 +281,7 @@ export default function TVPage() {
         } else {
           // Restore index from localStorage as fallback if Firestore was reset
           const cachedIndex = typeof window !== "undefined"
-            ? Number(localStorage.getItem(TV_INDEX_KEY)) || 0
+            ? Number(localStorage.getItem(getTvIndexKey())) || 0
             : 0;
           if (cachedIndex > 0 && cachedIndex < state.playlist.length && state.currentIndex === 0) {
             state.currentIndex = cachedIndex;
@@ -287,6 +298,14 @@ export default function TVPage() {
         setVideos(userVideos);
         setChannel(c);
         setTvUserState(finalState);
+        // If Firestore has a valid seek, increment seekVersion so PlyrPlayer re-mounts with it
+        if (finalState.currentSeek > 0.1 && Math.abs(finalState.currentSeek - cachedSeek) > 1) {
+          setSeekVersion(v => v + 1);
+        }
+        // Give user time to resume — 5s countdown before Start TV button becomes active
+        if (finalState.currentSeek > 0.1) {
+          setResumeCountdown(5);
+        }
       } catch {} finally {
         if (mounted) setLoading(false);
       }
@@ -362,22 +381,19 @@ export default function TVPage() {
     }
   }, [tvUserState?.currentIndex]);
 
-  // ─── Advance to next video in user's playlist ───
-  // Stops at the end — never wraps back to index 0.
+  // ─── Advance to next video in user's playlist (wraps around like dashboard) ───
   const advanceToNext = useCallback(() => {
     setStartTvCountdown(null);
     if (!tvUserState || tvUserState.playlist.length === 0) return;
-    // If on the last video, don't advance — playlist is complete
-    if (tvUserState.currentIndex >= tvUserState.playlist.length - 1) return;
-    const nextIndex = tvUserState.currentIndex + 1;
+    const nextIndex = (tvUserState.currentIndex + 1) % tvUserState.playlist.length;
     const uid = auth.currentUser?.uid;
     if (uid) {
       updateUserTvProgress(uid, nextIndex, 0);
     }
     // Reset localStorage cache for new video
     if (typeof window !== "undefined") {
-      localStorage.setItem(TV_SEEK_KEY, "0");
-      localStorage.setItem(TV_INDEX_KEY, String(nextIndex));
+      localStorage.setItem(getTvSeekKey(), "0");
+      localStorage.setItem(getTvIndexKey(), String(nextIndex));
     }
     setTvUserState((prev) => prev ? { ...prev, currentIndex: nextIndex, currentSeek: 0 } : prev);
   }, [tvUserState]);
@@ -387,7 +403,7 @@ export default function TVPage() {
     lastTvSeekRef.current = time;
     // Write to localStorage instantly for cross-page resume
     if (typeof window !== "undefined") {
-      localStorage.setItem(TV_SEEK_KEY, String(time));
+      localStorage.setItem(getTvSeekKey(), String(time));
     }
   }, []);
 
@@ -425,8 +441,8 @@ export default function TVPage() {
     }
     // Also persist to localStorage as fresh backup
     if (typeof window !== "undefined") {
-      localStorage.setItem(TV_SEEK_KEY, String(lastTvSeekRef.current));
-      localStorage.setItem(TV_INDEX_KEY, String(lastTvIndexRef.current));
+      localStorage.setItem(getTvSeekKey(), String(lastTvSeekRef.current));
+      localStorage.setItem(getTvIndexKey(), String(lastTvIndexRef.current));
     }
   }, []);
 
@@ -441,7 +457,7 @@ export default function TVPage() {
     };
   }, [tvUserState?.currentIndex, saveTvProgress]);
 
-  // ─── Start TV countdown timer ───
+  // ─── Start TV countdown timer (after video ends — auto-advances) ───
   useEffect(() => {
     if (startTvCountdown === null || startTvCountdown <= 0) return;
     const timer = setTimeout(() => {
@@ -454,6 +470,19 @@ export default function TVPage() {
     }, 1000);
     return () => clearTimeout(timer);
   }, [startTvCountdown, advanceToNext]);
+
+  // ─── Resume countdown timer (on page load with saved seek — just releases button) ───
+  useEffect(() => {
+    if (resumeCountdown === null || resumeCountdown <= 0) return;
+    const timer = setTimeout(() => {
+      if (resumeCountdown <= 1) {
+        setResumeCountdown(null); // button becomes active
+      } else {
+        setResumeCountdown(resumeCountdown - 1);
+      }
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [resumeCountdown]);
 
   /* Save on page unload / tab hide */
   useEffect(() => {
@@ -2797,20 +2826,23 @@ export default function TVPage() {
                   )}
                 </div>
 
-                {/* Start TV button */}
-                {startTvCountdown !== null && (
+                {/* Start TV button (always visible as Next button) */}
+                {currentVideo && (
                   <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, display: "flex", justifyContent: "center", padding: "10px", zIndex: 15, pointerEvents: "none" }}>
                     <button
-                      style={{ pointerEvents: "auto" }}
+                      style={{ pointerEvents: "auto", opacity: startTvCountdown !== null || resumeCountdown !== null ? 0.6 : 1, cursor: startTvCountdown !== null || resumeCountdown !== null ? "not-allowed" : "pointer" }}
                       className="tv-start-btn"
+                      disabled={startTvCountdown !== null || resumeCountdown !== null}
                       onClick={() => {
-                        setStartTvCountdown(null);
-                        advanceToNext();
+                        if (startTvCountdown === null && resumeCountdown === null) {
+                          setStartTvCountdown(null);
+                          advanceToNext();
+                        }
                       }}
+                      title={resumeCountdown !== null ? `Resuming in ${resumeCountdown}s` : startTvCountdown !== null ? `Starting in ${startTvCountdown}s` : "Skip to next video"}
                     >
                       <i className="fas fa-play"></i>
-                      Start TV
-                      <span className="tv-start-countdown">{startTvCountdown}s</span>
+                      <span>{resumeCountdown !== null ? `Resuming in ${resumeCountdown}s` : startTvCountdown !== null ? `Next in ${startTvCountdown}s` : "Start TV"}</span>
                     </button>
                   </div>
                 )}

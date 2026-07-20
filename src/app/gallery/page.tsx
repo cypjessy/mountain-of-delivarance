@@ -364,7 +364,7 @@ export default function GalleryPage() {
       <ToastBridge />
 
       <div className="app-container">
-        <PremiumTopBar icon="fa-images" title="MOUNTAIN OF DELIVERANCE CHURCH" subtitle="Photo Gallery" />
+        <PremiumTopBar icon="fa-images" title="MOD NAKURU" subtitle="Photo Gallery" />
 
         {/* ========== OFFLINE BANNER ========== */}
         {offline && (

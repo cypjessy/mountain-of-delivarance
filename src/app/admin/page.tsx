@@ -2,26 +2,22 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
+
+import AlbumArt from "@/components/shared/AlbumArt";
 import { signOut as firebaseSignOut } from "firebase/auth";
-import { doc, onSnapshot, deleteDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
+import { doc, onSnapshot, deleteDoc } from "firebase/firestore";
 import { useAppStore } from "@/lib/useAppStore";
 import { getNowPlaying as azuracastGetNowPlaying, getSongHistory, getStationStatus, getQueue, toggleAutoDJ, getStreamers, deleteStreamer, getStationId } from "@/lib/azuracast";
 import type { QueueItem, Streamer, Playlist } from "@/lib/azuracast";
 
-import AlbumArt from "@/components/shared/AlbumArt";
-
-import { useTvPlayer } from "@/lib/tv/TvPlayerProvider";
-import { useFullscreenToggle } from "@/lib/tv/fullscreen";
-import { getChannel, getVideos, getUserTvState, updateUserTvProgress, autoInitUserPlaylist } from "@/lib/youtube";
-import type { YouTubeChannel, YouTubeVideo, UserTvState } from "@/lib/youtube";
 import AdminBottomNav from "@/components/admin/AdminBottomNav";
 import ToastBridge from "@/components/dashboard/ToastBridge";
+import ShareAppQrModal from "@/components/shared/ShareAppQrModal";
 import EventCarousel from "@/components/dashboard/EventCarousel";
 import AlbumCarousel from "@/components/shared/AlbumCarousel";
 import PremiumTopBar from "@/components/shared/PremiumTopBar";
-import AppUpdateBubble from "@/components/shared/AppUpdateBubble";
-import ShareAppQrModal from "@/components/shared/ShareAppQrModal";
+import LiveTvEmbed from "@/components/shared/LiveTvEmbed";
 
 /* ==================================================================
    MOCK DATA
@@ -33,7 +29,7 @@ import ShareAppQrModal from "@/components/shared/ShareAppQrModal";
 const DEFAULT_NP = {
   title: "Station Offline",
   artist: "",
-  albumArt: "",
+  albumArt: undefined as string | undefined,
   elapsed: 0,
   duration: 0,
   source: "Offline" as const,
@@ -92,13 +88,14 @@ function timeAgo(date: Date): string {
 
 export default function AdminPage() {
   const router = useRouter();
-  const { toggleFullscreen } = useFullscreenToggle();
+
   const storeLogout = useAppStore((s) => s.logout);
   const storeChurchConfig = useAppStore((s) => s.churchConfig);
   const churchInfo = {
     name: storeChurchConfig?.name || "Church",
     shortName: (() => {
       const full = storeChurchConfig?.name || "Church";
+      // e.g., "Mountain of Deliverance Nakuru Church" -> "MOD Nakuru"
       const words = full.split(" ").filter((w:string) => w.length > 0);
       const initials = words.map((w:string) => w[0]).join("").toUpperCase();
       const city = words.length >= 4 ? words[words.length - 2] : words[words.length - 1];
@@ -110,6 +107,7 @@ export default function AdminPage() {
   const [showProfileDropdown, setShowProfileDropdown] = useState(false);
   const [chartPeriod, setChartPeriod] = useState<string>("7days");
   const [showSetup, setShowSetup] = useState(false);
+  const [showQr, setShowQr] = useState(false);
 
   /* Radio real-time state (polled from AzuraCast) */
   const [radioNP, setRadioNP] = useState<import("@/lib/azuracast").NowPlayingData | null>(null);
@@ -123,225 +121,10 @@ export default function AdminPage() {
   const [autoDJToggling, setAutoDJToggling] = useState(false);
   const [liveStreamers, setLiveStreamers] = useState<Streamer[]>([]);
   const [streamDeletingId, setStreamDeletingId] = useState<string | null>(null);
-  const [updateNotif, setUpdateNotif] = useState<{versionName: string; downloadUrl: string; sentAt: any} | null>(null);
-  const [showQr, setShowQr] = useState(false);
   const [liveTvStatus, setLiveTvStatus] = useState<{isLive: boolean; liveVideoId: string | null; liveTitle: string | null} | null>(null);
+  const [updateNotif, setUpdateNotif] = useState<{versionName: string; downloadUrl: string; sentAt: any} | null>(null);
 
-  const [stationUptime, setStationUptime] = useState("");
-
-  // ─── TV state (channel + videos + user playlist) ───
-  const [tvChannel, setTvChannel] = useState<YouTubeChannel | null>(null);
-  const [tvVideos, setTvVideos] = useState<YouTubeVideo[]>([]);
-  const [tvLoading, setTvLoading] = useState(true);
-  const tvPlayer = useTvPlayer();
-  const [tvUserState, setTvUserState] = useState<UserTvState | null>(null);
-  const [tvStartCountdown, setTvStartCountdown] = useState(20);
-  const lastTvSeekRef = useRef(0);
-  const lastTvIndexRef = useRef(0);
-
-  const tvCurrentVideo = tvUserState && tvUserState.playlist.length > 0
-    ? tvVideos.find((v) => v.id === tvUserState.playlist[tvUserState.currentIndex]) ?? null
-    : null;
-
-  // Register portal target via callback ref — fires on mount/unmount regardless
-  // of conditional rendering timing. Works with the async-loaded div.
-  const tvPlayerTargetRef = useCallback((el: HTMLDivElement | null) => {
-    tvPlayer.registerTarget(el);
-  }, [tvPlayer.registerTarget]);
-
-  // Play current video when it changes to a different one (initial mount, advancement, page switches).
-  // Does NOT watch seek — avoids re-firing when saveTvProgress updates state.
-  // Guards against overriding an active live stream.
-  useEffect(() => {
-    if (tvPlayer.isLive) return;
-    if (tvCurrentVideo && tvPlayer.currentVideoId !== tvCurrentVideo.id) {
-      tvPlayer.play(tvCurrentVideo.id, tvUserState?.currentSeek || 0);
-    }
-  }, [tvCurrentVideo?.id, tvPlayer, tvPlayer.isLive]);
-
-  // Track current seek and index via refs for periodic Firestore saves
-  const handleTvTimeUpdate = useCallback((time: number) => {
-    lastTvSeekRef.current = time;
-  }, []);
-
-  // Keep index ref in sync with state (used by saveTvProgress)
-  useEffect(() => {
-    if (tvUserState) {
-      lastTvIndexRef.current = tvUserState.currentIndex;
-    }
-  }, [tvUserState?.currentIndex]);
-
-  // Advance to next video when current ends
-  const handleAdvanceToNext = useCallback(() => {
-    if (!tvUserState || tvUserState.playlist.length === 0) return;
-    // If on the last video, don't advance — playlist is complete
-    if (tvUserState.currentIndex >= tvUserState.playlist.length - 1) return;
-    const nextIndex = tvUserState.currentIndex + 1;
-    const nextId = tvUserState.playlist[nextIndex];
-    const uid = auth.currentUser?.uid;
-    if (uid) updateUserTvProgress(uid, nextIndex, 0);
-    setTvUserState((prev) => prev ? { ...prev, currentIndex: nextIndex, currentSeek: 0 } : prev);
-    if (nextId) tvPlayer.play(nextId, 0);
-  }, [tvUserState, tvPlayer]);
-
-  // Keep callbacks in sync with latest versions
-  useEffect(() => {
-    tvPlayer.setCallbacks({
-      onEnded: handleAdvanceToNext,
-      onTimeUpdate: handleTvTimeUpdate,
-    });
-  }, [handleAdvanceToNext, handleTvTimeUpdate, tvPlayer]);
-
-  /* Save current progress to Firestore and sync local state.
-     setTvUserState is safe here because the interval effect has stable deps
-     ([saveTvProgress]) — it does NOT restart on state changes. */
-  const saveTvProgress = useCallback(() => {
-    const uid = auth.currentUser?.uid;
-    const seek = lastTvSeekRef.current;
-    const index = lastTvIndexRef.current;
-    if (uid) {
-      updateUserTvProgress(uid, index, seek).catch(() => {});
-      setTvUserState((prev) =>
-        prev && (prev.currentIndex !== index || prev.currentSeek !== seek)
-          ? { ...prev, currentIndex: index, currentSeek: seek }
-          : prev
-      );
-    }
-  }, []);
-
-  /* Periodically save seek position (every 5s) — stable deps, never restarts mid-session */
-  useEffect(() => {
-    if (!auth.currentUser?.uid) return;
-    const interval = setInterval(saveTvProgress, 5000);
-    return () => clearInterval(interval);
-  }, [saveTvProgress]);
-
-  /* Save on page unload / tab hide */
-  useEffect(() => {
-    const handleUnload = () => saveTvProgress();
-    const handleVisibility = () => {
-      if (document.visibilityState === "hidden") saveTvProgress();
-    };
-    window.addEventListener("beforeunload", handleUnload);
-    document.addEventListener("visibilitychange", handleVisibility);
-    return () => {
-      window.removeEventListener("beforeunload", handleUnload);
-      document.removeEventListener("visibilitychange", handleVisibility);
-    };
-  }, [saveTvProgress]);
-
-  // ─── App resume — save on background, re-fetch on foreground (Android) ───
-  useEffect(() => {
-    let canceled = false;
-    import("@capacitor/core")
-      .then(({ Capacitor }) => {
-        if (canceled || !Capacitor.isNativePlatform()) return;
-        return import("@capacitor/app");
-      })
-      .then((AppModule) => {
-        if (canceled || !AppModule) return;
-        const { App } = AppModule;
-        App.addListener("appStateChange", (state) => {
-          if (!state.isActive) {
-            saveTvProgress();
-          } else {
-            const uid = auth.currentUser?.uid;
-            if (uid) {
-              getUserTvState(uid).then((s) => setTvUserState(s));
-            }
-          }
-        }).then((handler) => {
-          if (canceled) handler.remove();
-        });
-      });
-    return () => { canceled = true; };
-  }, [saveTvProgress]);
-
-  // Countdown timer on Start TV button (prevents premature clicks while video preloads)
-  useEffect(() => {
-    setTvStartCountdown(20);
-    const t = setInterval(() => {
-      setTvStartCountdown((prev) => {
-        if (prev <= 1) { clearInterval(t); return 0; }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => clearInterval(t);
-  }, []);
-
-  /* Start TV — always advances to the next video in the playlist.
-     If no playlist exists yet, auto-initialises one and plays the first video.
-     Progress is saved periodically by the 5s interval once the new video plays. */
-  const handleStartTv = useCallback(async () => {
-    if (!tvUserState || tvUserState.playlist.length === 0) {
-      const uid = auth.currentUser?.uid;
-      if (uid && tvVideos.length > 0) {
-        const yt = await import("@/lib/youtube");
-        const state = await yt.autoInitUserPlaylist(uid);
-        setTvUserState(state);
-        const firstId = state.playlist[state.currentIndex];
-        if (firstId) tvPlayer.play(firstId, state.currentSeek || 0);
-      } else {
-        window.dispatchEvent(new CustomEvent("show-toast", {
-          detail: { title: "No Videos", message: "No videos available to play. Sync videos from the admin panel.", type: "info", duration: 3000 }
-        }));
-      }
-      return;
-    }
-    const nextIndex = (tvUserState.currentIndex + 1) % tvUserState.playlist.length;
-    const nextId = tvUserState.playlist[nextIndex];
-    const uid = auth.currentUser?.uid;
-    if (uid) await updateUserTvProgress(uid, nextIndex, 0);
-    setTvUserState((prev) => prev ? { ...prev, currentIndex: nextIndex, currentSeek: 0 } : prev);
-    if (nextId) tvPlayer.play(nextId, 0);
-  }, [tvUserState, tvVideos, tvPlayer]);
-
-  // Fetch TV channel and videos on mount
-  useEffect(() => {
-    let mounted = true;
-    const fetchTv = async () => {
-      const uid = auth.currentUser?.uid;
-      if (!uid) return;
-      try {
-        const [c, vids, state] = await Promise.all([
-          getChannel().catch(() => null),
-          getVideos({ max: 500, includeHidden: true }).catch<YouTubeVideo[]>(() => []),
-          uid ? getUserTvState(uid) : Promise.resolve({ playlist: [], currentIndex: 0, currentSeek: 0, updatedAt: null }),
-        ]);
-        if (!mounted) return;
-        if (c) setTvChannel(c);
-        if (vids.length > 0) setTvVideos(vids);
-        let finalState = state;
-        if (state.playlist.length === 0 && vids.length > 0) {
-          finalState = await autoInitUserPlaylist(uid);
-        }
-        setTvUserState(finalState);
-      } catch {} finally {
-        if (mounted) setTvLoading(false);
-      }
-    };
-    fetchTv();
-    return () => { mounted = false; };
-  }, []);
-
-  // ─── App update notification listener ───
-  useEffect(() => {
-    const unsub = onSnapshot(doc(db, "update_notifications", "latest"), (snap: any) => {
-      if (snap.exists()) {
-        const d = snap.data();
-        if (d.downloadUrl) {
-          setUpdateNotif({
-            versionName: d.versionName || "latest",
-            downloadUrl: d.downloadUrl,
-            sentAt: d.sentAt || null,
-          });
-        }
-      }
-    });
-    return () => unsub();
-  }, []);
-
-  // ─── Live TV status listener (tv_live_status/main in Firestore) ───
+  // ─── Live TV status listener ───
   useEffect(() => {
     const unsub = onSnapshot(doc(db, "tv_live_status", "main"), (snap: any) => {
       if (snap.exists()) {
@@ -358,6 +141,21 @@ export default function AdminPage() {
     return () => unsub();
   }, []);
 
+  // ─── App update notification listener ───
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "update_notifications", "latest"), (snap: any) => {
+      if (snap.exists()) {
+        const d = snap.data();
+        if (d.downloadUrl) {
+          setUpdateNotif({ versionName: d.versionName || "", downloadUrl: d.downloadUrl, sentAt: d.sentAt });
+        }
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  const [stationUptime, setStationUptime] = useState("");
+
 
   // Stat cards (YouTube sections removed)
   interface StatCard {
@@ -371,7 +169,7 @@ export default function AdminPage() {
   const nowPlaying = radioNP?.nowPlaying ? {
     title: radioNP.nowPlaying.song.title || "No track",
     artist: radioNP.nowPlaying.song.artist || "",
-    albumArt: radioNP.nowPlaying.song.albumArt || "",
+    albumArt: radioNP.nowPlaying.song.albumArt || undefined,
     elapsed: radioNP.nowPlaying.elapsed || 0,
     duration: radioNP.nowPlaying.duration || 0,
     source: radioBackendRunning ? "AutoDJ" as const : "Offline" as const,
@@ -616,7 +414,7 @@ export default function AdminPage() {
 
         /* ========== HEADER ========== */
         .dash-header {
-            padding: 8px 16px 10px;
+            padding: 6px 12px 6px;
             display: flex;
             align-items: center;
             justify-content: space-between;
@@ -625,18 +423,19 @@ export default function AdminPage() {
             border-bottom: 1px solid var(--border);
             position: relative;
             z-index: 100;
+            gap: 6px;
         }
-        .dash-header-left { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
-        .dash-header-logo { width: 36px; height: 36px; background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end)); border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 14px; font-weight: 800; color: #fff; }
-        .dash-header-info { min-width: 0; }
-        .dash-header-info h1 { font-size: 16px; font-weight: 800; letter-spacing: -0.3px; line-height: 1.2; }
-        .dash-header-info .tagline { font-size: 11px; color: var(--text-tertiary); font-weight: 500; }
+        .dash-header-left { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; overflow: hidden; }
+        .dash-header-logo { width: 32px; height: 32px; background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end)); border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 12px; font-weight: 800; color: #fff; }
+        .dash-header-info { min-width: 0; overflow: hidden; }
+        .dash-header-info h1 { font-size: 14px; font-weight: 800; letter-spacing: -0.2px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .dash-header-info .tagline { font-size: 10px; color: var(--text-tertiary); font-weight: 500; }
 
-        .dash-header-center { display: flex; align-items: center; gap: 8px; padding: 0 10px; }
+        .dash-header-center { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
         .dash-onair-badge {
-            display: flex; align-items: center; gap: 5px;
-            padding: 4px 10px; border-radius: 20px;
-            font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+            display: flex; align-items: center; gap: 3px;
+            padding: 2px 8px; border-radius: 12px;
+            font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px;
         }
         .dash-onair-badge.live {
             background: rgba(74,222,128,0.12); color: var(--success);
@@ -680,19 +479,20 @@ export default function AdminPage() {
         .live-banner-btn:active { transform: scale(0.95); opacity: 0.9; }
 
         .dash-listener-count {
-            display: flex; align-items: center; gap: 4px;
-            font-size: 12px; font-weight: 600; color: var(--text-secondary);
-            background: var(--surface); border-radius: 12px; padding: 4px 10px;
+            display: flex; align-items: center; gap: 3px;
+            font-size: 10px; font-weight: 600; color: var(--text-secondary);
+            background: var(--surface); border-radius: 10px; padding: 2px 7px;
             border: 1px solid var(--border);
+            flex-shrink: 0;
         }
-        .dash-listener-count i { font-size: 12px; color: var(--primary); }
+        .dash-listener-count i { font-size: 10px; color: var(--primary); }
 
-        .dash-header-right { position: relative; }
+        .dash-header-right { position: relative; display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
         .dash-avatar-btn {
-            width: 36px; height: 36px; border-radius: var(--radius-full);
+            width: 32px; height: 32px; border-radius: var(--radius-full);
             background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
             border: 2px solid var(--surface-elevated); color: #fff;
-            font-size: 13px; font-weight: 700; cursor: pointer;
+            font-size: 11px; font-weight: 700; cursor: pointer;
             display: flex; align-items: center; justify-content: center;
             transition: all 0.2s ease;
         }
@@ -1304,192 +1104,39 @@ export default function AdminPage() {
         .toast-content .title { font-size: 14px; font-weight: 600; }
         .toast-content .message { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
 
-        /* ===== TV WRAP (edge-to-edge like member dashboard) ===== */
-        .tv-top-wrap {
-          margin: 0 calc(-1 * var(--section-px, 16px));
-        }
-        .tv-top {
+        /* ===== LIVE TV EMBED ===== */
+        .live-tv-header {
           display: flex; align-items: center; justify-content: space-between;
-          padding: 8px 14px;
+          margin-bottom: 10px;
         }
-        .tv-station {
+        .live-tv-header-left {
           display: flex; align-items: center; gap: 8px;
-          font-size: 13px; font-weight: 700;
+          font-size: 14px; font-weight: 700;
         }
-        .tv-station i { color: #3B82F6; font-size: 14px; }
-        .tv-badges { display: flex; align-items: center; gap: 8px; }
-        .tv-live-badge {
-          display: flex; align-items: center; gap: 5px;
-          padding: 4px 10px; border-radius: 20px;
-          font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
-          transition: all 0.3s ease;
+        .live-tv-header-left i { font-size: 14px; color: #3B82F6; }
+        .live-tv-manage-btn {
+          background: none; border: none;
+          color: var(--primary); font-size: 12px; font-weight: 600;
+          cursor: pointer; display: flex; align-items: center; gap: 4px;
+          padding: 4px 8px; border-radius: 8px;
+          transition: all 0.2s;
         }
-        .tv-live-badge.live { background: rgba(59,130,246,0.12); color: #3B82F6; }
-        .tv-live-badge.off { background: rgba(107,107,107,0.12); color: var(--text-tertiary); }
-        .tv-live-dot { width: 6px; height: 6px; border-radius: 50%; }
-        .tv-live-badge.live .tv-live-dot { background: #3B82F6; animation: livePulse 1.5s ease-in-out infinite; }
-        .tv-live-badge.off .tv-live-dot { background: var(--text-tertiary); }
-        .tv-sub-badge {
-          display: flex; align-items: center; gap: 4px;
-          padding: 4px 10px; border-radius: 20px;
-          background: var(--surface); border: 1px solid var(--border);
-          font-size: 11px; font-weight: 600; color: var(--text-secondary);
-        }
-        .tv-sub-badge i { font-size: 10px; color: #3B82F6; }
-
-        .tv-player-container {
+        .live-tv-manage-btn:active { background: rgba(232,168,56,0.1); }
+        .live-tv-embed-wrap {
           position: relative;
           width: 100%;
           aspect-ratio: 16 / 9;
+          border-radius: var(--radius-md);
+          overflow: hidden;
           background: #000;
-          overflow: hidden;
-          z-index: 1;
+          border: 1px solid var(--border);
         }
-        .tv-player-container .plyr { width: 100%; height: 100%; }
-        .tv-player-container .plyr__video-wrapper { height: 100%; }
-        .tv-player-container .plyr__video-embed { aspect-ratio: auto !important; }
-        .tv-player-container .plyr__video-embed,
-        .tv-player-container iframe { width: 100% !important; height: 100% !important; }
-        .tv-player-container .plyr__video-embed iframe { transform: scale(1.03); }
-        @media (max-width: 480px) {
-          .tv-player-container .plyr__controls { padding: 6px 4px !important; }
-          .tv-player-container .plyr__control { padding: 8px 6px !important; min-width: 36px; min-height: 36px; }
-          .tv-player-container .plyr__control svg { width: 18px; height: 18px; }
-          .tv-player-container .plyr__time { font-size: 11px; }
-          .tv-player-container { min-height: 240px; }
-        }
-
-        .tv-overlay {
+        .live-tv-iframe {
           position: absolute;
-          bottom: 0; left: 0; right: 0;
-          padding: 10px 14px;
-          display: flex;
-          align-items: flex-end;
-          justify-content: space-between;
-          gap: 8px;
-          background: linear-gradient(0deg, rgba(0,0,0,0.8) 0%, transparent 100%);
-          pointer-events: none;
-        }
-        .tv-overlay > * { pointer-events: auto; }
-        .tv-overlay-info { flex: 1; min-width: 0; }
-        .tv-overlay-now {
-          font-size: 10px;
-          color: #3B82F6;
-          font-weight: 700;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-          display: flex; align-items: center; gap: 4px;
-          margin-bottom: 2px;
-        }
-        .tv-overlay-now i { font-size: 9px; }
-        .tv-overlay-title {
-          font-size: 13px;
-          font-weight: 600;
-          color: #fff;
-          text-shadow: 0 1px 4px rgba(0,0,0,0.5);
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-        .tv-expand-btn {
-          width: 44px; height: 44px; border-radius: 12px;
-          background: rgba(255,255,255,0.12);
-          border: 1px solid rgba(255,255,255,0.12);
-          color: rgba(255,255,255,0.9);
-          font-size: 18px;
-          cursor: pointer;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          flex-shrink: 0;
-          transition: all 0.2s;
-          backdrop-filter: blur(4px);
-        }
-        .tv-expand-btn:active { background: rgba(255,255,255,0.2); transform: scale(0.9); }
-
-        .tv-no-video {
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          gap: 8px;
-          padding: 32px;
-          border-radius: var(--radius-md);
-          background: var(--surface-card);
-          border: 1px dashed var(--border);
-          color: var(--text-tertiary);
-          font-size: 13px;
-          margin-bottom: 10px;
-          z-index: 1;
-          position: relative;
-        }
-        .tv-no-video i { font-size: 28px; opacity: 0.4; }
-
-        .tv-channel-strip {
-          display: flex; align-items: center; gap: 12px;
-          padding: 10px 12px;
-          background: var(--surface);
-          border: 1px solid var(--border);
-          border-radius: var(--radius-sm);
-          position: relative;
-          z-index: 1;
-        }
-        .tv-channel-avatar {
-          width: 36px; height: 36px; border-radius: 50%;
-          overflow: hidden; flex-shrink: 0;
-          background: var(--surface-elevated);
-          display: flex; align-items: center; justify-content: center;
-          position: relative;
-        }
-        .tv-channel-avatar img { width: 100%; height: 100%; object-fit: cover; }
-        .tv-channel-avatar i { font-size: 16px; color: #FF0000; }
-        .tv-avatar-img { position: absolute; inset: 0; border-radius: 50%; }
-        .tv-channel-info { flex: 1; min-width: 0; }
-        .tv-channel-name { font-size: 13px; font-weight: 700; }
-        .tv-channel-meta { font-size: 11px; color: var(--text-tertiary); margin-top: 1px; }
-        .tv-watch-btn {
-          flex-shrink: 0;
-          padding: 7px 14px;
-          border-radius: 8px;
-          background: linear-gradient(135deg, #3B82F6, #6366F1);
+          top: 0; left: 0;
+          width: 100%; height: 100%;
           border: none;
-          color: #fff;
-          font-size: 11px;
-          font-weight: 700;
-          cursor: pointer;
-          display: flex;
-          align-items: center;
-          gap: 5px;
-          transition: all 0.2s;
         }
-        .tv-watch-btn:active { transform: scale(0.95); }
-
-        .tv-start-btn {
-          display: flex; align-items: center; justify-content: center; gap: 8px;
-          width: calc(100% - 32px); padding: 14px;
-          margin: 8px 16px 0;
-          border-radius: var(--radius-md);
-          background: linear-gradient(135deg, #3B82F6, #6366F1);
-          border: none; color: #fff;
-          font-size: 14px; font-weight: 700;
-          cursor: pointer; transition: all 0.2s ease;
-          position: relative; z-index: 1;
-        }
-        .tv-start-btn:active { transform: scale(0.97); }
-        .tv-start-btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
-        .tv-start-btn i { font-size: 13px; }
-        .tv-start-hint { font-size: 12px; color: var(--text-secondary); text-align: center; padding: 6px 16px 0; font-weight: 500; }
-        .tv-next-slot {
-          display: flex; align-items: center; gap: 6px;
-          padding: 8px 12px;
-          margin: 6px 16px 0;
-          font-size: 11px; color: var(--text-tertiary);
-          background: var(--surface);
-          border-radius: var(--radius-sm);
-          border: 1px solid var(--border);
-          position: relative; z-index: 1;
-        }
-        .tv-next-slot i { color: #3B82F6; font-size: 10px; }
 
                 /* ===== PREMIUM RADIO CARD (compact) ===== */
         .rh-hero {
@@ -1677,26 +1324,47 @@ export default function AdminPage() {
         .section-link:active { background: rgba(232,168,56,0.1); }
       `}</style>
 
-      <ToastBridge />
-
       {updateNotif && (
-        <AppUpdateBubble
-          update={updateNotif}
-          onDismiss={async () => {
-            setUpdateNotif(null);
-            try { await deleteDoc(doc(db, "update_notifications", "latest")); } catch {}
-          }}
-        />
+        <div style={{
+          padding: "10px 16px", background: "linear-gradient(135deg, rgba(232,168,56,0.12), rgba(212,118,42,0.06))",
+          borderBottom: "1px solid rgba(232,168,56,0.15)", display: "flex", alignItems: "center", gap: 10, flexShrink: 0,
+        }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#E8A838" }}>📲 App Update Available</div>
+            <div style={{ fontSize: 11, color: "#A0A0A0", marginTop: 1 }}>Tap to download the latest version</div>
+          </div>
+          <a
+            href={updateNotif.downloadUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              padding: "7px 16px", borderRadius: 10, background: "linear-gradient(135deg, #E8A838, #D4762A)",
+              color: "#fff", fontSize: 12, fontWeight: 700, border: "none", cursor: "pointer",
+              textDecoration: "none", whiteSpace: "nowrap",
+            }}
+          >
+            <i className="fas fa-download"></i> Download
+          </a>
+          <button
+            onClick={async () => {
+              setUpdateNotif(null);
+              try { await deleteDoc(doc(db, "update_notifications", "latest")); } catch {}
+            }}
+            style={{ background: "none", border: "none", color: "#6B6B6B", cursor: "pointer", fontSize: 14, padding: 4 }}
+          >
+            <i className="fas fa-xmark"></i>
+          </button>
+        </div>
       )}
-
       <ShareAppQrModal open={showQr} onClose={() => setShowQr(false)} />
+      <ToastBridge />
 
       {/* ===== SETUP CHECKLIST ===== */}
       {showSetup && !allSetupDone && (
         <div className="setup-overlay">
           <div className="setup-card">
             <div className="setup-welcome">
-              <h2>Welcome to {churchInfo.shortName}!</h2>
+              <h2>Welcome to {churchInfo.name}!</h2>
               <p>Let&apos;s get you set up and broadcasting in no time.</p>
             </div>
             <div className="setup-progress">
@@ -1732,17 +1400,17 @@ export default function AdminPage() {
       <div className="app-container">
         <PremiumTopBar minimal />
 
-        {/* ─── LIVE BANNER ─── */}
-        {liveTvStatus?.isLive && (
-          <div className="live-banner">
-            <div className="live-banner-left">
-              <span className="live-banner-dot"></span>
-              <div className="live-banner-info">
-                <div className="live-banner-title">MOD NAKURU IS LIVE</div>
-                <div className="live-banner-sub">{liveTvStatus.liveTitle || "Watch live stream now"}</div>
+        {/* LIVE TV BANNER */}
+        {liveTvStatus?.isLive && liveTvStatus.liveVideoId && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 14px", margin: "0 14px", borderRadius: 10, background: "linear-gradient(135deg, rgba(239,68,68,0.08), rgba(239,68,68,0.02))", border: "1px solid rgba(239,68,68,0.15)", cursor: "pointer", animation: "tvStartIn 0.35s ease" }} onClick={() => router.push("/live")}>
+            <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#EF4444", animation: "livePulse 1.5s ease-in-out infinite", flexShrink: 0 }}></div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>
+                📺 {liveTvStatus.liveTitle || "Church TV"} is live
               </div>
+              <div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>Click to watch Live TV</div>
             </div>
-            <button className="live-banner-btn" onClick={() => router.push("/live")}>
+            <button style={{ padding: "6px 12px", borderRadius: 8, border: "none", background: "linear-gradient(135deg, #EF4444, #DC2626)", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>
               <i className="fas fa-play"></i> Watch
             </button>
           </div>
@@ -1754,32 +1422,36 @@ export default function AdminPage() {
             <div className="dash-header-logo">
               <i className="fas fa-cross"></i>
             </div>
-            <div className="dash-header-info">
-              <h1>{churchInfo.shortName}</h1>
+            <div className="dash-header-info" style={{ minWidth: 0, overflow: "hidden" }}>
+              <h1 style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={churchInfo.name}>
+                {churchInfo.shortName}
+              </h1>
             </div>
           </div>
 
-          <div className="dash-header-right" ref={dropdownRef} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <div className={`dash-onair-badge ${radioBackendRunning ? "live" : "off"}`} style={{ padding: "3px 8px", fontSize: 9 }}>
-              <div className="dash-onair-dot" style={{ width: 5, height: 5 }}></div>
-              {radioBackendRunning ? "On Air" : "Off"}
+          <div className="dash-header-center">
+            <div className={`dash-onair-badge ${radioBackendRunning ? "live" : "off"}`}>
+              <div className="dash-onair-dot"></div>
+              {radioBackendRunning ? "On Air" : "Off Air"}
             </div>
-            <div className="dash-listener-count" style={{ padding: "3px 8px", fontSize: 11 }}>
-              <i className="fas fa-headphones" style={{ fontSize: 10 }}></i>
+            <div className="dash-listener-count">
+              <i className="fas fa-headphones"></i>
               <span>{liveListeners}</span>
             </div>
+          </div>
+
+          <div className="dash-header-right" ref={dropdownRef}>
             <button
               className="dash-avatar-btn"
               onClick={() => setShowQr(true)}
               title="Share App"
-              style={{ width: 32, height: 32, fontSize: 12 }}
+              style={{ background: "none", border: "1px solid var(--border)", color: "var(--text-secondary)", fontSize: 15 }}
             >
               <i className="fas fa-share-nodes"></i>
             </button>
             <button
               className="dash-avatar-btn"
               onClick={() => setShowProfileDropdown((p) => !p)}
-              style={{ width: 32, height: 32, fontSize: 11, border: "1px solid var(--surface-elevated)" }}
             >
               {churchInfo.logoInitials}
             </button>
@@ -1806,107 +1478,7 @@ export default function AdminPage() {
         {/* CONTENT SCROLL */}
         <div className="content-scroll">
 
-          {/* ─── TV LIVE STREAM BANNER ─── */}
-          {tvPlayer.isLive && tvPlayer.liveStatus?.liveVideoId && (
-            <div className="live-banner" style={{ borderTop: "1px solid rgba(239,68,68,0.1)", borderBottom: "1px solid rgba(239,68,68,0.1)" }}>
-              <div className="live-banner-left">
-                <div className="live-banner-dot"></div>
-                <div className="live-banner-info">
-                  <div className="live-banner-title" style={{ color: "#EF4444" }}>
-                    <i className="fab fa-youtube" style={{ marginRight: 4 }}></i>
-                    {tvPlayer.liveStatus.liveTitle || "Live Stream"}
-                  </div>
-                  <div className="live-banner-sub">
-                    Church TV · Watch the live broadcast now
-                  </div>
-                </div>
-              </div>
-              <button className="live-banner-btn" onClick={() => tvPlayer.play(tvPlayer.liveStatus!.liveVideoId!)}>
-                <i className="fas fa-play"></i> Watch Live
-              </button>
-            </div>
-          )}
-
-          {/* ─── TV HERO CARD ─── */}
-          <section className="feed-section">
-            <div className="tv-top-wrap">
-              <div className="tv-top">
-                <div className="tv-station">
-                  <i className="fas fa-tv"></i>
-                  <span>Church TV</span>
-                </div>
-                <div className="tv-badges">
-                  <div className={`tv-live-badge ${tvCurrentVideo ? "live" : "off"}`}>
-                    <span className="tv-live-dot"></span>
-                    {tvCurrentVideo ? "On Air" : "Off Air"}
-                  </div>
-                  {tvChannel && (
-                    <div className="tv-sub-badge">
-                      <i className="fas fa-users"></i>
-                      {tvChannel.subscriberCount || "—"}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {tvCurrentVideo ? (
-                <div ref={tvPlayerTargetRef} className="tv-player-container">
-                  <div className="tv-overlay">
-                    <div className="tv-overlay-info">
-                      <div className="tv-overlay-now">
-                        <i className="fas fa-tv"></i>
-                        Now Playing
-                      </div>
-                      <div className="tv-overlay-title">{tvCurrentVideo.title}</div>
-                    </div>
-                    <button className="tv-expand-btn" onClick={toggleFullscreen} title="Full screen">
-                      <i className="fas fa-expand"></i>
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="tv-no-video">
-                  <i className="fas fa-video-slash"></i>
-                  <span>TV is off air</span>
-                </div>
-              )}
-
-              {tvChannel && (
-                <div className="tv-channel-strip">
-                  <div className="tv-channel-avatar">
-                    <i className="fab fa-youtube"></i>
-                    {tvChannel.thumbnail && (
-                      <img src={tvChannel.thumbnail.replace(/^http:/, 'https:')} alt="" referrerPolicy="no-referrer" crossOrigin="anonymous" onError={(e) => { e.currentTarget.style.display = 'none'; }} className="tv-avatar-img" />
-                    )}
-                  </div>
-                  <div className="tv-channel-info">
-                    <div className="tv-channel-name">{tvChannel.title}</div>
-                    <div className="tv-channel-meta">{tvVideos.length} videos</div>
-                  </div>
-                  <button className="tv-watch-btn" onClick={() => router.push("/admin/tv")}>
-                    <i className="fas fa-expand"></i> Manage
-                  </button>
-                </div>
-              )}
-
-              <button className="tv-start-btn" onClick={handleStartTv} title={tvStartCountdown > 0 ? `Ready in ${tvStartCountdown}s` : "Skip to next video"} disabled={tvStartCountdown > 0}>
-                <i className="fas fa-play"></i>
-                <span>{tvStartCountdown > 0 ? `Starting in ${tvStartCountdown}s` : 'Start TV'}</span>
-              </button>
-              <button className="tv-start-btn" onClick={() => router.push("/oracle-tv")} style={{ background: "linear-gradient(135deg, #8B5CF6, #6D28D9)" }}>
-                <i className="fas fa-tower-broadcast"></i>
-                <span>Oracle TV Live</span>
-              </button>
-              <div className="tv-start-hint">Click to switch playlist</div>
-
-              {tvUserState && tvUserState.playlist.length === 0 && (
-                <div className="tv-next-slot">
-                  <i className="fas fa-list"></i>
-                  <span>Your TV playlist is empty — add videos from the TV page</span>
-                </div>
-              )}
-            </div>
-          </section>
+          <LiveTvEmbed navTo="/admin/tv" />
 
           {/* PREMIUM RADIO HERO CARD */}
           <section className="feed-section">

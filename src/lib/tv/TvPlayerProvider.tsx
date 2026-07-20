@@ -101,7 +101,14 @@ export function TvPlayerProvider({ children }: { children: React.ReactNode }) {
   const play = useCallback((id: string, seekTime?: number) => {
     setVideoId((prev) => {
       // If switching to a different video, force a fresh Plyr instance
-      if (prev !== id) setPlayerKey((k) => k + 1);
+      if (prev !== id) {
+        setPlayerKey((k) => k + 1);
+      } else if (seekTime !== undefined && latestSeekRef.current !== undefined &&
+                 Math.abs(seekTime - latestSeekRef.current) > 1) {
+        // Same video but seek changed significantly (>1s) — force fresh Plyr instance
+        // so the new seek position is applied (e.g. after Firestore loads a saved state)
+        setPlayerKey((k) => k + 1);
+      }
       return id;
     });
     setSeek(seekTime);

@@ -1,20 +1,37 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
+import { doc, onSnapshot } from "firebase/firestore";
+import { db } from "@/lib/firebase";
 
 interface BottomNavProps {
-  activeTab?: "home" | "radio" | "meetings" | "gallery" | "tv";
+  activeTab?: "home" | "tv" | "radio" | "meetings" | "gallery";
 }
 
 export default function BottomNav({ activeTab: propActiveTab }: BottomNavProps) {
   const router = useRouter();
   const pathname = usePathname();
+  const [liveTvActive, setLiveTvActive] = useState(false);
+
+  // Listen for live TV status
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "tv_live_status", "main"), (snap: any) => {
+      if (snap.exists()) {
+        const d = snap.data();
+        setLiveTvActive(d.isLive && !!d.liveVideoId);
+      } else {
+        setLiveTvActive(false);
+      }
+    });
+    return () => unsub();
+  }, []);
 
   // Auto-detect active tab from pathname if not provided as prop
   const detectedTab = (() => {
     if (pathname === "/dashboard") return "home";
-    if (pathname === "/radio") return "radio";
     if (pathname === "/tv") return "tv";
+    if (pathname === "/radio") return "radio";
     if (pathname === "/meetings") return "meetings";
     if (pathname === "/gallery") return "gallery";
     return null;
@@ -41,18 +58,20 @@ export default function BottomNav({ activeTab: propActiveTab }: BottomNavProps) 
         <span>Home</span>
       </button>
       <button
+        className={`nav-item${activeTab === "tv" ? " active" : ""}`}
+        onClick={() => navigate("/tv")}
+        style={{ position: "relative" }}
+      >
+        <i className="fas fa-tv"></i>
+        {liveTvActive && <span className="nav-live-dot"></span>}
+        <span>TV</span>
+      </button>
+      <button
         className={`nav-item${activeTab === "radio" ? " active" : ""}`}
         onClick={() => navigate("/radio")}
       >
         <i className="fas fa-radio"></i>
         <span>Radio</span>
-      </button>
-      <button
-        className={`nav-item${activeTab === "tv" ? " active" : ""}`}
-        onClick={() => navigate("/tv")}
-      >
-        <i className="fas fa-tv"></i>
-        <span>TV</span>
       </button>
       <button
         className={`nav-item${activeTab === "meetings" ? " active" : ""}`}
