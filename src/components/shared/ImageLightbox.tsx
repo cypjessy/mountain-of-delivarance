@@ -168,31 +168,31 @@ export function useImageLightbox(): ImageLightboxAPI {
           <div className="il-actions">
             <button className="il-action-btn" onClick={async () => {
               if (!current) return;
-              // Native Web Share API — works on mobile & desktop
-              if (navigator.share) {
-                try {
-                  await navigator.share({
-                    title: current.title,
-                    text: current.description || current.title,
-                    url: current.url,
-                  });
-                  return;
-                } catch { /* user cancelled, do nothing */ }
-              }
-              // Fallback: copy URL
               try {
-                await navigator.clipboard.writeText(current.url);
-                window.dispatchEvent(new CustomEvent("show-toast", {
-                  detail: { title: "Copied", message: "Image URL copied to clipboard!", type: "success", duration: 2000 },
-                }));
-              } catch { /* clipboard unavailable */ }
+                const { Share } = await import("@capacitor/share");
+                await Share.share({ title: current.title, url: current.url });
+              } catch {
+                if (navigator.share) {
+                  try { await navigator.share({ title: current.title, url: current.url }); return; } catch {}
+                }
+                try {
+                  await navigator.clipboard.writeText(current.url);
+                  window.dispatchEvent(new CustomEvent("show-toast", {
+                    detail: { title: "Copied", message: "Image URL copied to clipboard!", type: "success", duration: 2000 },
+                  }));
+                } catch {}
+              }
             }}>
               <i className="fas fa-share-nodes"></i>
             </button>
-            <button className="il-action-btn" onClick={() => {
+            <button className="il-action-btn" onClick={async () => {
               if (!current) return;
-              // Open image in new browser tab so user can save it directly
-              window.open(current.url, "_blank");
+              try {
+                const { Browser } = await import("@capacitor/browser");
+                await Browser.open({ url: current.url });
+              } catch {
+                window.open(current.url, "_blank");
+              }
             }}>
               <i className="fas fa-download"></i>
             </button>

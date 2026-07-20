@@ -266,7 +266,7 @@ export default function TVPage() {
 
         if (state.playlist.length === 0) {
           // First visit — auto-populate playlist with recent videos (more can be added from the Playlist tab)
-          const all = await getVideos({ max: 15 });
+          const all = await getVideos({ max: 15, minDuration: 1800 });
           const valid = all.filter((v) => v.title && v.id);
           if (valid.length > 0) {
             const ids = valid.map((v) => v.id);

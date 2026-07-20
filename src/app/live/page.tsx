@@ -86,6 +86,69 @@ export default function LivePage() {
     else setUserName("Guest");
   }, []);
 
+  // ─── YouTube IFrame API player ───
+  const playerRef = useRef<any>(null);
+  const playerContainerRef = useRef<HTMLDivElement>(null);
+  const [playerReady, setPlayerReady] = useState(false);
+  const [playerMuted, setPlayerMuted] = useState(true);
+
+  useEffect(() => {
+    if (!liveStatus?.isLive || !liveStatus?.liveVideoId) return;
+
+    const videoId = liveStatus.liveVideoId;
+
+    function createPlayer() {
+      if (!playerContainerRef.current) return;
+      playerRef.current = new (window as any).YT.Player(playerContainerRef.current, {
+        height: "100%",
+        width: "100%",
+        videoId,
+        playerVars: {
+          autoplay: 1,
+          mute: 1,
+          controls: 1,
+          rel: 0,
+          showinfo: 0,
+        },
+        events: {
+          onReady: (e: any) => {
+            // Unmute shortly after the player starts (browser policy allows this
+            // since the user clicked to navigate here).
+            setTimeout(() => {
+              try {
+                e.target.unMute();
+                e.target.setVolume(100);
+                setPlayerMuted(false);
+              } catch {}
+              setPlayerReady(true);
+            }, 400);
+          },
+          onStateChange: (e: any) => {
+            if (e.data === (window as any).YT.PlayerState.PLAYING && playerMuted) {
+              try { e.target.unMute(); e.target.setVolume(100); setPlayerMuted(false); } catch {}
+            }
+          },
+        },
+      });
+    }
+
+    if ((window as any).YT?.Player) {
+      createPlayer();
+    } else {
+      (window as any).onYouTubeIframeAPIReady = createPlayer;
+      if (!document.querySelector('script[src*="youtube.com/iframe_api"]')) {
+        const tag = document.createElement("script");
+        tag.src = "https://www.youtube.com/iframe_api";
+        document.head.appendChild(tag);
+      }
+    }
+
+    return () => {
+      try { playerRef.current?.destroy(); } catch {}
+      playerRef.current = null;
+    };
+  }, [liveStatus?.liveVideoId, liveStatus?.isLive]);
+
   // ─── Orientation ───
   const [isLandscape, setIsLandscape] = useState(false);
   useEffect(() => {
@@ -433,12 +496,7 @@ export default function LivePage() {
 
       {/* ─── Full-screen YouTube background ─── */}
       <div className="lv-bg">
-        <iframe
-          src={`https://www.youtube.com/embed/${liveStatus.liveVideoId}?autoplay=1&mute=1&controls=1&rel=0&showinfo=0`}
-          className="lv-frame"
-          allow="autoplay; encrypted-media; fullscreen"
-          allowFullScreen
-        />
+        <div ref={playerContainerRef} className="lv-frame" />
       </div>
 
       {/* ─── Top bar (overlaid on video) ─── */}
@@ -452,6 +510,16 @@ export default function LivePage() {
         </div>
         <div className="lv-actions">
           <div className="lv-badge"><span className="lv-dot"></span> LIVE</div>
+          <button className="lv-orient" onClick={() => {
+            const p = playerRef.current;
+            if (!p) return;
+            try {
+              if (playerMuted) { p.unMute(); p.setVolume(100); setPlayerMuted(false); }
+              else { p.mute(); setPlayerMuted(true); }
+            } catch {}
+          }} title={playerMuted ? "Unmute" : "Mute"}>
+            <i className={`fas fa-volume-${playerMuted ? "mute" : "up"}`}></i>
+          </button>
           <button className="lv-orient" onClick={toggleOrientation}>
             <i className={`fas fa-${isLandscape ? "compress" : "expand"}`}></i>
           </button>

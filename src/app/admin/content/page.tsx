@@ -3319,38 +3319,27 @@ export default function AdminContentPage() {
                   const photo = displayedEntryPhotos[viewerIndex];
                   if (!photo?.cdnUrl) return;
                   try {
-                    const { Filesystem, Directory } = await import("@capacitor/filesystem");
-                    const response = await fetch(photo.cdnUrl);
-                    const blob = await response.blob();
-                    const reader = new FileReader();
-                    reader.onloadend = async () => {
-                      const base64 = reader.result as string;
-                      const filename = `${(photo.title || "photo").replace(/[^a-zA-Z0-9]/g, "_")}.jpg`;
-                      await Filesystem.writeFile({ path: filename, data: base64, directory: Directory.Documents });
-                      window.dispatchEvent(new CustomEvent("show-toast", {
-                        detail: { title: "Saved", message: "Photo saved to device", type: "success", duration: 2000 },
-                      }));
-                    };
-                    reader.readAsDataURL(blob);
+                    const { Browser } = await import("@capacitor/browser");
+                    await Browser.open({ url: photo.cdnUrl });
                   } catch {
-                    const link = document.createElement("a");
-                    link.href = photo.cdnUrl;
-                    link.download = photo.title || "photo";
-                    link.click();
+                    window.open(photo.cdnUrl, "_blank");
                   }
                 }} title="Download">
                   <i className="fas fa-download"></i>
                 </button>
-                <button className="iv-action-btn" onClick={(e) => {
+                <button className="iv-action-btn" onClick={async (e) => {
                   e.stopPropagation();
                   const photo = displayedEntryPhotos[viewerIndex];
-                  if (photo?.cdnUrl) {
+                  if (!photo?.cdnUrl) return;
+                  try {
+                    const { Share } = await import("@capacitor/share");
+                    await Share.share({ title: photo.title || "Photo", url: photo.cdnUrl });
+                  } catch {
                     if (navigator.share) {
-                      navigator.share({ title: photo.title, url: photo.cdnUrl });
-                    } else {
-                      navigator.clipboard.writeText(photo.cdnUrl);
-                      window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Copied", message: "Photo URL copied to clipboard", type: "success", duration: 2000 } }));
+                      try { await navigator.share({ title: photo.title, url: photo.cdnUrl }); return; } catch {}
                     }
+                    navigator.clipboard.writeText(photo.cdnUrl);
+                    window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Copied", message: "Photo URL copied to clipboard", type: "success", duration: 2000 } }));
                   }
                 }} title="Share">
                   <i className="fas fa-share-nodes"></i>

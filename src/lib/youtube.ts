@@ -63,12 +63,14 @@ const VIDEOS_COL = "youtube_videos";
 export async function getVideos(opts?: {
   max?: number;
   includeHidden?: boolean;
+  minDuration?: number;
 }): Promise<YouTubeVideo[]> {
   let q = query(collection(db, VIDEOS_COL), orderBy("position", "asc"));
   if (opts?.max) q = query(q, limit(opts.max));
   const snap = await getDocs(q);
   let list = snap.docs.map((d) => d.data() as YouTubeVideo);
   if (!opts?.includeHidden) list = list.filter((v) => !v.isHidden);
+  if (opts?.minDuration) list = list.filter((v) => v.duration >= opts.minDuration!);
   return list;
 }
 
@@ -342,7 +344,7 @@ export async function autoInitUserPlaylist(uid: string): Promise<UserTvState> {
   const state = await getUserTvState(uid);
   if (state.playlist.length > 0) return state; // Already has a playlist
 
-  const allVideos = await getVideos({ max: 500 });
+  const allVideos = await getVideos({ max: 500, minDuration: 1800 });
   const ids = allVideos.map((v) => v.id);
   if (ids.length === 0) return state; // No videos to add
 

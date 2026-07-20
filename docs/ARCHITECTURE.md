@@ -161,7 +161,7 @@ Data is stored in Firestore collections: `youtube_channel`, `youtube_videos`, `y
 | Variable | Value |
 |----------|-------|
 | **Public Key** | `pk_live_06577a2f472241bb1a42af4327f7eeba7cd9790b` |
-| **Secret Key** | `sk_live_… (redacted)` |
+| **Secret Key** | `sk_live_…` (redacted) |
 
 **Status:** **LIVE** (keys start with `pk_live_` / `sk_live_`)
 
