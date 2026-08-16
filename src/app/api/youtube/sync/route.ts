@@ -13,8 +13,12 @@ interface YtChannelStat {
   videoCount: string;
 }
 
+interface YtChannelContentDetails {
+  relatedPlaylists: { uploads?: string };
+}
+
 interface YtChannelResponse {
-  items?: { id: string; snippet: YtChannelSnippet; statistics: YtChannelStat }[];
+  items?: { id: string; snippet: YtChannelSnippet; statistics: YtChannelStat; contentDetails: YtChannelContentDetails }[];
 }
 
 interface YtPlaylistItem {
@@ -66,8 +70,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "YOUTUBE_API_KEY not configured" }, { status: 500 });
     }
 
-    // Fetch channel info
-    const channelUrl = `${YT_API_BASE}/channels?part=snippet,statistics&id=${channelId}&key=${YT_API_KEY}`;
+    // Fetch channel info (include contentDetails to get the real uploads playlist ID)
+    const channelUrl = `${YT_API_BASE}/channels?part=snippet,statistics,contentDetails&id=${channelId}&key=${YT_API_KEY}`;
     const channelRes = await fetch(channelUrl);
     if (!channelRes.ok) {
       const err = await channelRes.text().catch(() => "Unknown");
@@ -88,8 +92,9 @@ export async function POST(req: NextRequest) {
       videoCount: parseInt(ch.statistics.videoCount || "0"),
     };
 
-    // Fetch all uploaded videos via the uploads playlist (UU{channelId})
-    const uploadsPlaylistId = `UU${channelId}`;
+    // Get the real uploads playlist ID from the API response (most reliable)
+    // Fall back to replacing UC→UU if contentDetails is missing
+    const uploadsPlaylistId = ch.contentDetails?.relatedPlaylists?.uploads || channelId.replace(/^UC/, "UU");
     const allVideoIds: string[] = [];
     const videoMetaMap = new Map<string, { title: string; description: string; thumbnail: string; channelTitle: string; channelId: string; publishedAt: string; position: number }>();
 
@@ -136,23 +141,26 @@ export async function POST(req: NextRequest) {
     }
 
     // Build videos array
-    const videos = allVideoIds.map((id) => {
-      const meta = videoMetaMap.get(id)!;
-      return {
-        id,
-        title: meta.title,
-        description: meta.description,
-        thumbnail: meta.thumbnail,
-        channelTitle: meta.channelTitle,
-        channelId: meta.channelId,
-        publishedAt: meta.publishedAt,
-        duration: durations.get(id) || 0,
-        position: meta.position,
-        isFeatured: false,
-        isHidden: false,
-        syncedAt: null,
-      };
-    });
+    const MIN_DURATION = 1800; // 30 minutes — skip shorts & short clips
+    const videos = allVideoIds
+      .map((id) => {
+        const meta = videoMetaMap.get(id)!;
+        return {
+          id,
+          title: meta.title,
+          description: meta.description,
+          thumbnail: meta.thumbnail,
+          channelTitle: meta.channelTitle,
+          channelId: meta.channelId,
+          publishedAt: meta.publishedAt,
+          duration: durations.get(id) || 0,
+          position: meta.position,
+          isFeatured: false,
+          isHidden: false,
+          syncedAt: null,
+        };
+      })
+      .filter((v) => v.duration >= MIN_DURATION);
 
     return NextResponse.json({ channel, videos });
   } catch (err: any) {

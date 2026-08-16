@@ -6,10 +6,8 @@ import { signOut as firebaseSignOut } from "firebase/auth";
 import { doc, onSnapshot, deleteDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import { useAppStore } from "@/lib/useAppStore";
-import { getNowPlaying as azuracastGetNowPlaying, getSongHistory, getStationStatus, getQueue, toggleAutoDJ, getStreamers, deleteStreamer, getStationId } from "@/lib/azuracast";
-import type { QueueItem, Streamer, Playlist } from "@/lib/azuracast";
+import { getNowPlaying as azuracastGetNowPlaying, getSongHistory, getStationStatus, getStationId } from "@/lib/azuracast";
 
-import AlbumArt from "@/components/shared/AlbumArt";
 
 import { useTvPlayer } from "@/lib/tv/TvPlayerProvider";
 import { useFullscreenToggle } from "@/lib/tv/fullscreen";
@@ -71,21 +69,6 @@ function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-function timeAgo(date: Date): string {
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const secs = Math.floor(diffMs / 1000);
-  if (secs < 10) return "just now";
-  if (secs < 60) return `${secs}s ago`;
-  const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  if (days < 7) return `${days}d ago`;
-  return `${Math.floor(days / 7)}w ago`;
-}
-
 /* ==================================================================
    COMPONENT
    ================================================================== */
@@ -95,6 +78,8 @@ export default function AdminPage() {
   const { toggleFullscreen } = useFullscreenToggle();
   const storeLogout = useAppStore((s) => s.logout);
   const storeChurchConfig = useAppStore((s) => s.churchConfig);
+  const storeUserDoc = useAppStore((s) => s.userDoc);
+  const authUser = useAppStore((s) => s.user);
   const churchInfo = {
     name: storeChurchConfig?.name || "Church",
     shortName: (() => {
@@ -107,27 +92,25 @@ export default function AdminPage() {
     tagline: storeChurchConfig?.tagline || "",
     logoInitials: (storeChurchConfig?.name || "CH").split(" ").map((w:string) => w[0]).join("").slice(0, 3).toUpperCase(),
   };
+  const firstName = (storeUserDoc?.display_name || authUser?.displayName || "").trim().split(" ")[0] || "Admin";
+  const greetingTime = (() => {
+    const h = new Date().getHours();
+    if (h < 12) return "Morning";
+    if (h < 17) return "Afternoon";
+    return "Evening";
+  })();
+  const todayLabel = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
   const [showProfileDropdown, setShowProfileDropdown] = useState(false);
-  const [chartPeriod, setChartPeriod] = useState<string>("7days");
   const [showSetup, setShowSetup] = useState(false);
 
   /* Radio real-time state (polled from AzuraCast) */
   const [radioNP, setRadioNP] = useState<import("@/lib/azuracast").NowPlayingData | null>(null);
   const [radioHistory, setRadioHistory] = useState<import("@/lib/azuracast").SongHistoryItem[]>([]);
-  const [radioSongsPlayedToday, setRadioSongsPlayedToday] = useState(0);
   const [radioBackendRunning, setRadioBackendRunning] = useState(false);
-  const [radioPeakListeners, setRadioPeakListeners] = useState(0);
-  const [radioListenerHistory, setRadioListenerHistory] = useState<number[]>([]);
   const [liveListeners, setLiveListeners] = useState(DEFAULT_LISTENER_COUNT);
-  const [radioQueue, setRadioQueue] = useState<QueueItem[]>([]);
-  const [autoDJToggling, setAutoDJToggling] = useState(false);
-  const [liveStreamers, setLiveStreamers] = useState<Streamer[]>([]);
-  const [streamDeletingId, setStreamDeletingId] = useState<string | null>(null);
   const [updateNotif, setUpdateNotif] = useState<{versionName: string; downloadUrl: string; sentAt: any} | null>(null);
   const [showQr, setShowQr] = useState(false);
   const [liveTvStatus, setLiveTvStatus] = useState<{isLive: boolean; liveVideoId: string | null; liveTitle: string | null} | null>(null);
-
-  const [stationUptime, setStationUptime] = useState("");
 
   // ─── TV state (channel + videos + user playlist) ───
   const [tvChannel, setTvChannel] = useState<YouTubeChannel | null>(null);
@@ -138,6 +121,8 @@ export default function AdminPage() {
   const [tvStartCountdown, setTvStartCountdown] = useState(20);
   const lastTvSeekRef = useRef(0);
   const lastTvIndexRef = useRef(0);
+  const tvTransitioningRef = useRef(false);
+  const [tvTransitioning, setTvTransitioning] = useState(false);
 
   const tvCurrentVideo = tvUserState && tvUserState.playlist.length > 0
     ? tvVideos.find((v) => v.id === tvUserState.playlist[tvUserState.currentIndex]) ?? null
@@ -171,18 +156,26 @@ export default function AdminPage() {
     }
   }, [tvUserState?.currentIndex]);
 
-  // Advance to next video when current ends
+  /** Find the next valid video index going forward from current position (no wrap-around). */
+  const findNextValidVideo = useCallback((currentIndex: number, playlist: string[], validIds: Set<string>): number | null => {
+    for (let i = currentIndex + 1; i < playlist.length; i++) {
+      if (validIds.has(playlist[i])) return i;
+    }
+    return null;
+  }, []);
+
+  // Advance to next valid video when current ends (skip missing, no wrap-around)
   const handleAdvanceToNext = useCallback(() => {
     if (!tvUserState || tvUserState.playlist.length === 0) return;
-    // If on the last video, don't advance — playlist is complete
-    if (tvUserState.currentIndex >= tvUserState.playlist.length - 1) return;
-    const nextIndex = tvUserState.currentIndex + 1;
+    const validIds = new Set(tvVideos.map((v) => v.id));
+    const nextIndex = findNextValidVideo(tvUserState.currentIndex, tvUserState.playlist, validIds);
+    if (nextIndex === null) return;
     const nextId = tvUserState.playlist[nextIndex];
     const uid = auth.currentUser?.uid;
     if (uid) updateUserTvProgress(uid, nextIndex, 0);
     setTvUserState((prev) => prev ? { ...prev, currentIndex: nextIndex, currentSeek: 0 } : prev);
     if (nextId) tvPlayer.play(nextId, 0);
-  }, [tvUserState, tvPlayer]);
+  }, [tvUserState, tvVideos, tvPlayer, findNextValidVideo]);
 
   // Keep callbacks in sync with latest versions
   useEffect(() => {
@@ -269,32 +262,51 @@ export default function AdminPage() {
     return () => clearInterval(t);
   }, []);
 
-  /* Start TV — always advances to the next video in the playlist.
+  /* Start TV — advances to the next valid video in the playlist.
      If no playlist exists yet, auto-initialises one and plays the first video.
-     Progress is saved periodically by the 5s interval once the new video plays. */
+     Twin guards (ref + state) prevent double-clicks during async transitions.
+     Skips any playlist entries whose IDs aren't in the synced video library. */
   const handleStartTv = useCallback(async () => {
-    if (!tvUserState || tvUserState.playlist.length === 0) {
-      const uid = auth.currentUser?.uid;
-      if (uid && tvVideos.length > 0) {
-        const yt = await import("@/lib/youtube");
-        const state = await yt.autoInitUserPlaylist(uid);
-        setTvUserState(state);
-        const firstId = state.playlist[state.currentIndex];
-        if (firstId) tvPlayer.play(firstId, state.currentSeek || 0);
-      } else {
-        window.dispatchEvent(new CustomEvent("show-toast", {
-          detail: { title: "No Videos", message: "No videos available to play. Sync videos from the admin panel.", type: "info", duration: 3000 }
-        }));
+    if (tvTransitioningRef.current) return;
+    tvTransitioningRef.current = true;
+    setTvTransitioning(true);
+    try {
+      if (!tvUserState || tvUserState.playlist.length === 0) {
+        const uid = auth.currentUser?.uid;
+        if (uid && tvVideos.length > 0) {
+          const yt = await import("@/lib/youtube");
+          const state = await yt.autoInitUserPlaylist(uid);
+          setTvUserState(state);
+          const firstId = state.playlist[state.currentIndex];
+          if (firstId) tvPlayer.play(firstId, state.currentSeek || 0);
+        } else {
+          window.dispatchEvent(new CustomEvent("show-toast", {
+            detail: { title: "No Videos", message: "No videos available to play. Sync videos from the admin panel.", type: "info", duration: 3000 }
+          }));
+        }
+        return;
       }
-      return;
+
+      const validIds = new Set(tvVideos.map((v) => v.id));
+      const nextIndex = findNextValidVideo(tvUserState.currentIndex, tvUserState.playlist, validIds);
+
+      if (nextIndex === null) {
+        window.dispatchEvent(new CustomEvent("show-toast", {
+          detail: { title: "No Videos", message: "No valid videos found in your playlist. Sync videos from the admin panel.", type: "info", duration: 3000 }
+        }));
+        return;
+      }
+
+      const nextId = tvUserState.playlist[nextIndex];
+      const uid = auth.currentUser?.uid;
+      if (uid) await updateUserTvProgress(uid, nextIndex, 0);
+      setTvUserState((prev) => prev ? { ...prev, currentIndex: nextIndex, currentSeek: 0 } : prev);
+      if (nextId) tvPlayer.play(nextId, 0);
+    } finally {
+      tvTransitioningRef.current = false;
+      setTvTransitioning(false);
     }
-    const nextIndex = (tvUserState.currentIndex + 1) % tvUserState.playlist.length;
-    const nextId = tvUserState.playlist[nextIndex];
-    const uid = auth.currentUser?.uid;
-    if (uid) await updateUserTvProgress(uid, nextIndex, 0);
-    setTvUserState((prev) => prev ? { ...prev, currentIndex: nextIndex, currentSeek: 0 } : prev);
-    if (nextId) tvPlayer.play(nextId, 0);
-  }, [tvUserState, tvVideos, tvPlayer]);
+  }, [tvUserState, tvVideos, tvPlayer, findNextValidVideo]);
 
   // Fetch TV channel and videos on mount
   useEffect(() => {
@@ -359,11 +371,8 @@ export default function AdminPage() {
   }, []);
 
 
-  // Stat cards (YouTube sections removed)
-  interface StatCard {
-    id: string; color: string; icon: string; value: string; label: string;
-    trend?: string; sparkline?: number[]; colorCode: string;
-    subtitle?: string; progress?: number;
+  interface QuickAction {
+    route: string; icon: string; color: string; label: string; desc: string;
   }
 
 
@@ -383,30 +392,12 @@ export default function AdminPage() {
     isBackendRunning: radioBackendRunning,
   } : DEFAULT_NP;
 
-  const liveWeeklyChart = radioListenerHistory.length > 0
-    ? radioListenerHistory
-    : [0, 2, 5, 8, 12, 20, 32];
-
-  const statCards: StatCard[] = [
-    {
-      id: "listeners",
-      color: "blue",
-      icon: "fa-headphones",
-      value: String(liveListeners),
-      label: "Listening now",
-      trend: radioHistory.length > 0 ? `↑ ${radioPeakListeners} peak today` : "Awaiting data",
-      sparkline: [liveListeners > 5 ? Math.max(0, liveListeners - 5) : 1, Math.max(1, liveListeners - 3), liveListeners + 2, liveListeners + 5, liveListeners > 8 ? liveListeners - 2 : 1, liveListeners + 3, liveListeners],
-      colorCode: "#3B82F6",
-    },
-    {
-      id: "plays",
-      color: "purple",
-      icon: "fa-music",
-      value: String(radioSongsPlayedToday || "..."),
-      label: "Songs played today",
-      subtitle: radioBackendRunning ? `AutoDJ ${radioHistory.length > 0 ? "· " + radioHistory[0]?.song?.title || "" : ""}` : "Station offline",
-      colorCode: "#8B5CF6",
-    },
+  const quickActions: QuickAction[] = [
+    { route: "/admin/tv", icon: "fa-tv", color: "#60A5FA", label: "Church TV", desc: "Videos · Broadcast · Live" },
+    { route: "/admin/meetings", icon: "fa-people-group", color: "#34D399", label: "Meetings", desc: "Schedules · Prayer Rooms" },
+    { route: "/admin/content", icon: "fa-photo-film", color: "#A78BFA", label: "Content", desc: "Photos · Events · Media" },
+    { route: "/admin/members", icon: "fa-users", color: "#F87171", label: "Members", desc: "Directory · Roles" },
+    { route: "/admin/accounts", icon: "fa-user-shield", color: "#94A3B8", label: "Accounts", desc: "Admins · Access" },
   ];
 
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -422,74 +413,15 @@ export default function AdminPage() {
     router.push("/");
   };
 
-  // Toggle AutoDJ on/off via the real API
-  const handleToggleAutoDJ = useCallback(async () => {
-    setAutoDJToggling(true);
-    try {
-      const result = await toggleAutoDJ();
-      setRadioBackendRunning(result.running);
-      window.dispatchEvent(new CustomEvent("show-toast", {
-        detail: { title: result.running ? "AutoDJ Started" : "AutoDJ Stopped", message: result.running ? "AutoDJ is now running" : "AutoDJ has been stopped", type: "success", duration: 2500 },
-      }));
-    } catch (e) {
-      window.dispatchEvent(new CustomEvent("show-toast", {
-        detail: { title: "Toggle Failed", message: e instanceof Error ? e.message : "Could not toggle AutoDJ", type: "error", duration: 4000 },
-      }));
-    }
-    setAutoDJToggling(false);
-  }, []);
-
-  // Delete a streamer via the real API
-  const handleDeleteStreamer = useCallback(async (id: string, name: string) => {
-    setStreamDeletingId(id);
-    try {
-      await deleteStreamer(id);
-      setLiveStreamers((prev) => prev.filter((s) => s.id !== id));
-      window.dispatchEvent(new CustomEvent("show-toast", {
-        detail: { title: "Streamer Removed", message: `${name} has been removed`, type: "success", duration: 2500 },
-      }));
-    } catch (e) {
-      window.dispatchEvent(new CustomEvent("show-toast", {
-        detail: { title: "Delete Failed", message: e instanceof Error ? e.message : "Could not delete streamer", type: "error", duration: 4000 },
-      }));
-    }
-    setStreamDeletingId(null);
-  }, []);
-
-
-
-
-
-  // Compute uptime from earliest song in history
-  useEffect(() => {
-    const update = () => {
-      if (radioHistory.length > 0) {
-        const firstPlayed = radioHistory[radioHistory.length - 1]?.playedAt;
-        if (firstPlayed) {
-          const diffMs = Date.now() - new Date(firstPlayed).getTime();
-          const hrs = Math.floor(diffMs / 3600000);
-          const mins = Math.floor((diffMs % 3600000) / 60000);
-          setStationUptime(hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`);
-        }
-      }
-    };
-    const timer = setTimeout(update, 0);
-    const interval = setInterval(update, 60000);
-    return () => { clearTimeout(timer); clearInterval(interval); };
-  }, [radioHistory]);
-
-
-
   // Poll AzuraCast every 10 seconds
   useEffect(() => {
     let mounted = true;
     const poll = async () => {
       try {
-        const [np, history, status, queue] = await Promise.all([
+        const [np, history, status] = await Promise.all([
           azuracastGetNowPlaying(getStationId()).catch(() => null),
           getSongHistory(50).catch<[]>(() => []),
           getStationStatus(getStationId()).catch(() => ({ backendRunning: false, frontendRunning: false })),
-          getQueue().catch<QueueItem[]>(() => []),
         ]);
         if (!mounted) return;
 
@@ -498,15 +430,6 @@ export default function AdminPage() {
           const lc = np.listeners.current ?? 0;
           setLiveListeners(lc);
 
-          // Track peak listeners
-          setRadioPeakListeners((prev) => Math.max(prev, lc));
-
-          // Build listener history for chart (store last 24 points at 30min intervals)
-          setRadioListenerHistory((prev) => {
-            const next = [...prev, lc];
-            return next.length > 48 ? next.slice(-48) : next;
-          });
-
           setRadioBackendRunning(status?.backendRunning ?? false);
         }
 
@@ -514,23 +437,6 @@ export default function AdminPage() {
           setRadioHistory(history);
         }
 
-        setRadioQueue(queue && queue.length > 0 ? queue : []);
-
-        // Fetch real streamers
-        getStreamers().then((s) => {
-          if (mounted) setLiveStreamers(s);
-        }).catch(() => {});
-
-        // Estimate songs played today from history (songs in last 24h)
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const todaySongs = history.filter((h: any) => {
-          if (!h.playedAt) return false;
-          const played = new Date(h.playedAt);
-          return played >= today;
-        });
-        setRadioSongsPlayedToday(todaySongs.length || history.length);
       } catch {}
     };
     poll();
@@ -558,29 +464,29 @@ export default function AdminPage() {
       <style>{`
         :root {
             --primary: #E8A838;
-            --primary-light: #F5C76B;
-            --primary-dark: #C48A2A;
-            --bg: #0F0F0F;
-            --surface: #1A1A1A;
-            --surface-elevated: #242424;
-            --surface-card: #1E1E1E;
-            --surface-hover: #2A2A2A;
-            --text-primary: #FFFFFF;
-            --text-secondary: #A0A0A0;
-            --text-tertiary: #6B6B6B;
-            --border: #2A2A2A;
-            --error: #EF4444;
-            --success: #22C55E;
-            --info: #3B82F6;
-            --warning: #F59E0B;
-            --overlay: rgba(0,0,0,0.92);
+            --primary-light: #F6CB6E;
+            --primary-dark: #B98A1F;
+            --bg: #0F0D0A;
+            --surface: #181512;
+            --surface-elevated: #23201B;
+            --surface-card: #1C1915;
+            --surface-hover: #2B2720;
+            --text-primary: #F7F5F0;
+            --text-secondary: #A8A39A;
+            --text-tertiary: #75706A;
+            --border: #2B2720;
+            --error: #F87171;
+            --success: #34D399;
+            --info: #60A5FA;
+            --warning: #FBBF24;
+            --overlay: rgba(12,10,7,0.94);
             --gradient-start: #E8A838;
-            --gradient-end: #D4762A;
-            --gradient-purple: #8B5CF6;
-            --gradient-blue: #3B82F6;
-            --gradient-green: #22C55E;
-            --shadow-soft: 0 4px 20px rgba(232,168,56,0.15);
-            --shadow-elevated: 0 8px 32px rgba(0,0,0,0.45);
+            --gradient-end: #C9771D;
+            --gradient-purple: #A78BFA;
+            --gradient-blue: #60A5FA;
+            --gradient-green: #34D399;
+            --shadow-soft: 0 4px 20px rgba(232,168,56,0.16);
+            --shadow-elevated: 0 10px 36px rgba(0,0,0,0.55);
             --radius-sm: 12px;
             --radius-md: 16px;
             --radius-lg: 20px;
@@ -591,7 +497,7 @@ export default function AdminPage() {
         * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
         html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text-primary); }
 
-        .app-container { height: 100%; display: flex; flex-direction: column; position: relative; overflow: hidden; }
+        .app-container { height: 100%; display: flex; flex-direction: column; position: relative; overflow: hidden; background: radial-gradient(900px 420px at 50% -140px, rgba(232,168,56,0.07) 0%, transparent 70%), var(--bg); }
         @media (min-width: 480px) { .app-container { max-width: 480px; margin: 0 auto; } }
         @media (min-width: 768px) {
             .stats-grid { grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 16px 24px; }
@@ -611,7 +517,7 @@ export default function AdminPage() {
 
 
         /* ========== SCROLLABLE CONTENT ========== */
-        .content-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; padding-bottom: 80px; }
+        .content-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; padding-bottom: calc(80px + env(safe-area-inset-bottom, 0px)); }
         .content-scroll::-webkit-scrollbar { display: none; }
 
         /* ========== HEADER ========== */
@@ -639,10 +545,10 @@ export default function AdminPage() {
             font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
         }
         .dash-onair-badge.live {
-            background: rgba(74,222,128,0.12); color: var(--success);
+            background: rgba(52,211,153,0.12); color: var(--success);
         }
         .dash-onair-badge.off {
-            background: rgba(107,107,107,0.12); color: var(--text-tertiary);
+            background: rgba(117,112,106,0.12); color: var(--text-tertiary);
         }
         .dash-onair-dot {
             width: 6px; height: 6px; border-radius: var(--radius-full);
@@ -657,7 +563,7 @@ export default function AdminPage() {
         /* ===== LIVE BANNER ===== */
         .live-banner {
             padding: 12px 16px; display: flex; align-items: center; gap: 12px;
-            background: linear-gradient(135deg, rgba(239,68,68,0.1), rgba(239,68,68,0.04));
+            background: linear-gradient(135deg, rgba(248,113,113,0.1), rgba(248,113,113,0.04));
             flex-shrink: 0;
         }
         .live-banner-left { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
@@ -665,7 +571,7 @@ export default function AdminPage() {
             width: 10px; height: 10px; border-radius: var(--radius-full);
             background: var(--error); flex-shrink: 0;
             animation: livePulse 1.5s ease-in-out infinite;
-            box-shadow: 0 0 8px rgba(239,68,68,0.4);
+            box-shadow: 0 0 8px rgba(248,113,113,0.4);
         }
         .live-banner-info { min-width: 0; }
         .live-banner-title { font-size: 13px; font-weight: 700; color: var(--error); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -715,7 +621,7 @@ export default function AdminPage() {
         .dash-dropdown-item i { width: 18px; text-align: center; font-size: 14px; }
         .dash-dropdown-item:hover { background: var(--surface-hover); color: var(--text-primary); }
         .dash-dropdown-item.danger { color: var(--error); }
-        .dash-dropdown-item.danger:hover { background: rgba(239,68,68,0.1); }
+        .dash-dropdown-item.danger:hover { background: rgba(248,113,113,0.1); }
 
         /* ========== NOW PLAYING STRIP IN HEADER ========== */
         .dash-nowplaying-strip {
@@ -738,13 +644,17 @@ export default function AdminPage() {
             padding: 12px 16px;
         }
         .stat-card {
-            background: var(--surface-card); border: 1px solid var(--border);
+            background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0) 45%), var(--surface-card);
+            border: 1px solid var(--border);
             border-radius: var(--radius-lg); padding: 16px; position: relative;
-            overflow: hidden; cursor: pointer; transition: all 0.2s ease;
+            overflow: hidden; cursor: pointer; transition: all 0.25s ease;
         }
+        .stat-card:hover { border-color: rgba(232,168,56,0.22); transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0,0,0,0.42); }
         .stat-card:active { transform: scale(0.97); }
-        .stat-card .accent-line {
-            position: absolute; top: 0; left: 0; right: 0; height: 3px;
+        .stat-card-glow {
+            position: absolute; top: -46px; right: -46px;
+            width: 130px; height: 130px; border-radius: 50%;
+            filter: blur(30px); opacity: 0.16; pointer-events: none;
         }
         .stat-card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
         .stat-icon-bg {
@@ -760,8 +670,8 @@ export default function AdminPage() {
             font-size: 11px; font-weight: 600; margin-top: 6px;
             padding: 2px 8px; border-radius: 6px;
         }
-        .stat-trend.up { background: rgba(34,197,94,0.12); color: var(--success); }
-        .stat-trend.down { background: rgba(239,68,68,0.12); color: var(--error); }
+        .stat-trend.up { background: rgba(52,211,153,0.12); color: var(--success); }
+        .stat-trend.down { background: rgba(248,113,113,0.12); color: var(--error); }
 
         .storage-bar {
             width: 100%; height: 6px; border-radius: 3px;
@@ -790,8 +700,10 @@ export default function AdminPage() {
 
         /* ========== WIDGET CARDS ========== */
         .widget-card {
-            background: var(--surface-card); border: 1px solid var(--border);
+            background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0) 50%), var(--surface-card);
+            border: 1px solid var(--border);
             border-radius: var(--radius-lg); padding: 18px; margin-bottom: 14px;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.22);
         }
         .widget-card:last-child { margin-bottom: 0; }
 
@@ -845,12 +757,7 @@ export default function AdminPage() {
         .np-btn.primary { background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end)); color: #fff; }
         .np-btn.secondary { background: var(--surface); color: var(--text-primary); border: 1px solid var(--border); }
 
-        /* ========== QUICK STATS ========== */
-        .quickstats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
-        .qs-item { }
-        .qs-label { font-size: 11px; color: var(--text-tertiary); font-weight: 500; }
-        .qs-value { font-size: 16px; font-weight: 700; margin-top: 2px; }
-
+        /* ========== CHART ========== */
         .chart-bar-container {
             display: flex; align-items: flex-end; gap: 6px; height: 60px; padding-top: 4px;
         }
@@ -859,21 +766,9 @@ export default function AdminPage() {
             background: linear-gradient(180deg, var(--gradient-start), rgba(232,168,56,0.3));
             transition: height 0.5s ease; position: relative; min-height: 4px;
         }
-        .chart-bar.today { background: linear-gradient(180deg, var(--gradient-blue), rgba(59,130,246,0.3)); }
+        .chart-bar.today { background: linear-gradient(180deg, var(--gradient-blue), rgba(96,165,250,0.3)); }
 
         /* ========== TODAY AT A GLANCE ENHANCED ========== */
-        .qs-item { position: relative; }
-        .qs-sub { font-size:12px;font-weight:500;color:var(--text-tertiary);margin-left:4px; }
-        .autodj-toggle {
-          display:flex;align-items:center;justify-content:center;gap:6px;
-          padding:6px 14px;border-radius:10px;border:none;font-size:13px;font-weight:700;
-          cursor:pointer;transition:all 0.2s ease;width:100%;
-        }
-        .autodj-toggle:active { transform:scale(0.95); }
-        .autodj-toggle[data-running="true"] { background:rgba(74,222,128,0.12);color:var(--success); }
-        .autodj-toggle[data-running="false"] { background:var(--surface);color:var(--text-primary);border:1px solid var(--border); }
-        .autodj-toggle:disabled { opacity:0.6;cursor:not-allowed;transform:none; }
-
         .glance-np { display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface);border-radius:var(--radius-sm);margin-bottom:10px;border:1px solid var(--border);transition:all 0.15s ease; }
         .glance-np:active { background:var(--surface-elevated);transform:scale(0.98); }
         .glance-np-cover { width:42px;height:42px;border-radius:8px;flex-shrink:0;object-fit:cover; }
@@ -885,7 +780,7 @@ export default function AdminPage() {
         .glance-np-source { flex-shrink:0; }
         .source-badge { font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.3px;padding:3px 8px;border-radius:8px; }
         .source-badge.auto { background:rgba(232,168,56,0.12);color:var(--primary); }
-        .source-badge.off { background:rgba(107,107,107,0.12);color:var(--text-tertiary); }
+        .source-badge.off { background:rgba(117,112,106,0.12);color:var(--text-tertiary); }
 
         .glance-queue { margin-bottom:10px; }
         .glance-queue-label, .glance-recent-label { font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-tertiary);margin-bottom:6px;display:flex;align-items:center;gap:6px; }
@@ -932,7 +827,7 @@ export default function AdminPage() {
             background: var(--surface); border: 1px solid var(--border); color: var(--text-tertiary);
             cursor: pointer; transition: all 0.15s ease;
         }
-        .af-btn.active { background: rgba(59,130,246,0.12); border-color: var(--info); color: var(--info); }
+        .af-btn.active { background: rgba(96,165,250,0.12); border-color: var(--info); color: var(--info); }
         .af-btn:active { transform: scale(0.95); }
 
         .activity-item {
@@ -958,10 +853,10 @@ export default function AdminPage() {
         }
         .act-empty p { font-size: 13px; color: var(--text-secondary); }
         .activity-icon.gold { background: rgba(232,168,56,0.12); color: var(--primary); }
-        .activity-icon.green { background: rgba(34,197,94,0.12); color: var(--success); }
-        .activity-icon.blue { background: rgba(59,130,246,0.12); color: var(--info); }
-        .activity-icon.purple { background: rgba(139,92,246,0.12); color: var(--gradient-purple); }
-        .activity-icon.red { background: rgba(239,68,68,0.12); color: var(--error); }
+        .activity-icon.green { background: rgba(52,211,153,0.12); color: var(--success); }
+        .activity-icon.blue { background: rgba(96,165,250,0.12); color: var(--info); }
+        .activity-icon.purple { background: rgba(167,139,250,0.12); color: var(--gradient-purple); }
+        .activity-icon.red { background: rgba(248,113,113,0.12); color: var(--error); }
         .activity-text { flex: 1; min-width: 0; font-size: 13px; font-weight: 500; line-height: 1.4; }
         .activity-time { font-size: 11px; color: var(--text-tertiary); flex-shrink: 0; margin-top: 1px; }
 
@@ -991,7 +886,7 @@ export default function AdminPage() {
         }
         .schedule-dot.active { border-color: var(--success); background: var(--success); animation: livePulse 1.5s ease-in-out infinite; }
         .schedule-dot.upcoming { border-color: var(--text-tertiary); }
-        .schedule-dot.warning { border-color: var(--error); background: rgba(239,68,68,0.2); }
+        .schedule-dot.warning { border-color: var(--error); background: rgba(248,113,113,0.2); }
         .schedule-info { flex: 1; min-width: 0; }
         .schedule-label { font-size: 13px; font-weight: 600; }
         .schedule-label.warning { color: var(--error); }
@@ -1002,13 +897,15 @@ export default function AdminPage() {
             font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px;
             padding: 3px 8px; border-radius: 8px;
         }
-        .schedule-badge.now { background: rgba(74,222,128,0.12); color: var(--success); }
-        .schedule-badge.empty { background: rgba(239,68,68,0.12); color: var(--error); }
+        .schedule-badge.now { background: rgba(52,211,153,0.12); color: var(--success); }
+        .schedule-badge.empty { background: rgba(248,113,113,0.12); color: var(--error); }
 
         /* ========== RIGHT COLUMN WIDGETS ========== */
         .swidget {
-            background: var(--surface-card); border: 1px solid var(--border);
+            background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0) 50%), var(--surface-card);
+            border: 1px solid var(--border);
             border-radius: var(--radius-lg); padding: 16px; margin-bottom: 12px;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.22);
         }
         .swidget:last-child { margin-bottom: 0; }
         .swidget-header {
@@ -1022,8 +919,8 @@ export default function AdminPage() {
             font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px;
             padding: 3px 8px; border-radius: 8px;
         }
-        .swidget-badge.green { background: rgba(74,222,128,0.12); color: var(--success); }
-        .swidget-badge.red { background: rgba(239,68,68,0.12); color: var(--error); }
+        .swidget-badge.green { background: rgba(52,211,153,0.12); color: var(--success); }
+        .swidget-badge.red { background: rgba(248,113,113,0.12); color: var(--error); }
 
         /* Station Status */
         .status-row {
@@ -1060,7 +957,7 @@ export default function AdminPage() {
         }
         .stat-btn:active { transform: scale(0.95); }
         .stat-btn.start { background: var(--success); color: #fff; }
-        .stat-btn.stop { background: rgba(239,68,68,0.15); color: var(--error); border: 1px solid rgba(239,68,68,0.2); }
+        .stat-btn.stop { background: rgba(248,113,113,0.15); color: var(--error); border: 1px solid rgba(248,113,113,0.2); }
         .stat-btn.restart { background: var(--surface); color: var(--text-primary); border: 1px solid var(--border); }
 
         /* Active DJs */
@@ -1082,7 +979,7 @@ export default function AdminPage() {
         }
         .dj-info { flex: 1; min-width: 0; }
         .dj-name { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
-        .dj-name .live-badge { font-size: 9px; font-weight: 700; text-transform: uppercase; padding: 1px 6px; border-radius: 6px; background: rgba(74,222,128,0.15); color: var(--success); }
+        .dj-name .live-badge { font-size: 9px; font-weight: 700; text-transform: uppercase; padding: 1px 6px; border-radius: 6px; background: rgba(52,211,153,0.15); color: var(--success); }
         .dj-username { font-size: 11px; color: var(--text-tertiary); }
         .dj-last { font-size: 11px; color: var(--text-tertiary); flex-shrink: 0; }
         .dj-actions { display: flex; gap: 4px; flex-shrink: 0; }
@@ -1093,7 +990,7 @@ export default function AdminPage() {
             display: flex; align-items: center; justify-content: center;
         }
         .dj-action-btn:active { background: var(--surface-elevated); color: var(--text-secondary); }
-        .dj-action-btn.danger:active { color: var(--error); background: rgba(239,68,68,0.1); }
+        .dj-action-btn.danger:active { color: var(--error); background: rgba(248,113,113,0.1); }
 
         .add-dj-btn {
             width: 100%; padding: 8px; border-radius: 8px; margin-top: 8px;
@@ -1120,13 +1017,13 @@ export default function AdminPage() {
         .yt-info .sub { font-size: 11px; color: var(--text-tertiary); }
 
         .yt-live-card {
-            background: rgba(239,68,68,0.06); border: 1px solid rgba(239,68,68,0.15);
+            background: rgba(248,113,113,0.06); border: 1px solid rgba(248,113,113,0.15);
             border-radius: var(--radius-sm); padding: 12px;
             display: flex; align-items: center; gap: 10px;
         }
         .yt-live-dot {
             width: 10px; height: 10px; border-radius: var(--radius-full);
-            background: #EF4444; animation: livePulse 1.5s ease-in-out infinite;
+            background: #F87171; animation: livePulse 1.5s ease-in-out infinite;
             flex-shrink: 0;
         }
         .yt-live-info { flex: 1; }
@@ -1161,9 +1058,9 @@ export default function AdminPage() {
             width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0;
             display: flex; align-items: center; justify-content: center; font-size: 14px;
         }
-        .cs-icon.blue { background: rgba(59,130,246,0.12); color: var(--info); }
+        .cs-icon.blue { background: rgba(96,165,250,0.12); color: var(--info); }
         .cs-icon.gold { background: rgba(232,168,56,0.12); color: var(--primary); }
-        .cs-icon.purple { background: rgba(139,92,246,0.12); color: var(--gradient-purple); }
+        .cs-icon.purple { background: rgba(167,139,250,0.12); color: var(--gradient-purple); }
         .cs-info { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: space-between; }
         .cs-label { font-size: 13px; font-weight: 600; }
         .cs-detail { font-size: 11px; color: var(--text-tertiary); }
@@ -1172,7 +1069,7 @@ export default function AdminPage() {
             display: inline-flex; align-items: center; gap: 4px;
             padding: 2px 6px; border-radius: 6px;
             font-size: 10px; font-weight: 600;
-            background: rgba(239,68,68,0.1); color: var(--error);
+            background: rgba(248,113,113,0.1); color: var(--error);
         }
 
         /* Storage Breakdown */
@@ -1261,7 +1158,7 @@ export default function AdminPage() {
             bottom: 0;
             left: 0;
             right: 0;
-            background: rgba(15,15,15,0.92);
+            background: rgba(15,13,10,0.92);
             backdrop-filter: blur(20px) saturate(180%);
             -webkit-backdrop-filter: blur(20px) saturate(180%);
             border-top: 1px solid var(--border);
@@ -1297,8 +1194,8 @@ export default function AdminPage() {
         .toast { background: var(--surface-elevated); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 14px 18px; display: flex; align-items: center; gap: 12px; box-shadow: var(--shadow-elevated); transform: translateY(-20px); opacity: 0; transition: all 0.35s cubic-bezier(0.32, 0.72, 0, 1); pointer-events: auto; }
         .toast.show { transform: translateY(0); opacity: 1; }
         .toast-icon { width: 32px; height: 32px; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-        .toast-icon.success { background: rgba(74,222,128,0.15); color: var(--success); }
-        .toast-icon.error { background: rgba(255,107,107,0.15); color: var(--error); }
+        .toast-icon.success { background: rgba(52,211,153,0.15); color: var(--success); }
+        .toast-icon.error { background: rgba(248,113,113,0.15); color: var(--error); }
         .toast-icon.info { background: rgba(232,168,56,0.15); color: var(--primary); }
         .toast-content { flex: 1; }
         .toast-content .title { font-size: 14px; font-weight: 600; }
@@ -1316,7 +1213,7 @@ export default function AdminPage() {
           display: flex; align-items: center; gap: 8px;
           font-size: 13px; font-weight: 700;
         }
-        .tv-station i { color: #3B82F6; font-size: 14px; }
+        .tv-station i { color: #60A5FA; font-size: 14px; }
         .tv-badges { display: flex; align-items: center; gap: 8px; }
         .tv-live-badge {
           display: flex; align-items: center; gap: 5px;
@@ -1324,10 +1221,10 @@ export default function AdminPage() {
           font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
           transition: all 0.3s ease;
         }
-        .tv-live-badge.live { background: rgba(59,130,246,0.12); color: #3B82F6; }
-        .tv-live-badge.off { background: rgba(107,107,107,0.12); color: var(--text-tertiary); }
+        .tv-live-badge.live { background: rgba(96,165,250,0.12); color: #60A5FA; }
+        .tv-live-badge.off { background: rgba(117,112,106,0.12); color: var(--text-tertiary); }
         .tv-live-dot { width: 6px; height: 6px; border-radius: 50%; }
-        .tv-live-badge.live .tv-live-dot { background: #3B82F6; animation: livePulse 1.5s ease-in-out infinite; }
+        .tv-live-badge.live .tv-live-dot { background: #60A5FA; animation: livePulse 1.5s ease-in-out infinite; }
         .tv-live-badge.off .tv-live-dot { background: var(--text-tertiary); }
         .tv-sub-badge {
           display: flex; align-items: center; gap: 4px;
@@ -1335,7 +1232,7 @@ export default function AdminPage() {
           background: var(--surface); border: 1px solid var(--border);
           font-size: 11px; font-weight: 600; color: var(--text-secondary);
         }
-        .tv-sub-badge i { font-size: 10px; color: #3B82F6; }
+        .tv-sub-badge i { font-size: 10px; color: #60A5FA; }
 
         .tv-player-container {
           position: relative;
@@ -1374,7 +1271,7 @@ export default function AdminPage() {
         .tv-overlay-info { flex: 1; min-width: 0; }
         .tv-overlay-now {
           font-size: 10px;
-          color: #3B82F6;
+          color: #60A5FA;
           font-weight: 700;
           text-transform: uppercase;
           letter-spacing: 0.5px;
@@ -1451,7 +1348,7 @@ export default function AdminPage() {
           flex-shrink: 0;
           padding: 7px 14px;
           border-radius: 8px;
-          background: linear-gradient(135deg, #3B82F6, #6366F1);
+          background: linear-gradient(135deg, #60A5FA, #818CF8);
           border: none;
           color: #fff;
           font-size: 11px;
@@ -1469,7 +1366,7 @@ export default function AdminPage() {
           width: calc(100% - 32px); padding: 14px;
           margin: 8px 16px 0;
           border-radius: var(--radius-md);
-          background: linear-gradient(135deg, #3B82F6, #6366F1);
+          background: linear-gradient(135deg, #60A5FA, #818CF8);
           border: none; color: #fff;
           font-size: 14px; font-weight: 700;
           cursor: pointer; transition: all 0.2s ease;
@@ -1489,12 +1386,12 @@ export default function AdminPage() {
           border: 1px solid var(--border);
           position: relative; z-index: 1;
         }
-        .tv-next-slot i { color: #3B82F6; font-size: 10px; }
+        .tv-next-slot i { color: #60A5FA; font-size: 10px; }
 
                 /* ===== PREMIUM RADIO CARD (compact) ===== */
         .rh-hero {
             position: relative;
-            background: linear-gradient(180deg, rgba(232,168,56,0.06) 0%, rgba(15,15,15,0.5) 100%);
+            background: linear-gradient(180deg, rgba(232,168,56,0.06) 0%, rgba(15,13,10,0.5) 100%);
             border: 1px solid rgba(232,168,56,0.12);
             border-radius: var(--radius-xl);
             padding: 14px 16px 12px;
@@ -1510,7 +1407,7 @@ export default function AdminPage() {
         .rh-glow-2 {
             position: absolute; bottom: -60px; right: -60px;
             width: 200px; height: 200px;
-            background: radial-gradient(circle, rgba(212,118,42,0.06) 0%, transparent 70%);
+            background: radial-gradient(circle, rgba(201,119,29,0.06) 0%, transparent 70%);
             pointer-events: none;
         }
         .rh-top {
@@ -1530,10 +1427,10 @@ export default function AdminPage() {
             transition: all 0.3s ease;
         }
         .rh-live-badge.live {
-            background: rgba(74,222,128,0.12); color: var(--success);
+            background: rgba(52,211,153,0.12); color: var(--success);
         }
         .rh-live-badge.off {
-            background: rgba(107,107,107,0.12); color: var(--text-tertiary);
+            background: rgba(117,112,106,0.12); color: var(--text-tertiary);
         }
         .rh-live-dot {
             width: 5px; height: 5px; border-radius: 50%;
@@ -1629,7 +1526,7 @@ export default function AdminPage() {
             border: 1.5px solid rgba(232,168,56,0.15);
         }
         .rh-play-btn.playing .rh-play-ring {
-            border-color: rgba(74,222,128,0.3);
+            border-color: rgba(52,211,153,0.3);
         }
         .rh-actions-row {
             display: flex; align-items: center; gap: 8px;
@@ -1675,6 +1572,141 @@ export default function AdminPage() {
         }
         .section-link i { font-size: 10px; }
         .section-link:active { background: rgba(232,168,56,0.1); }
+
+        /* ========== PREMIUM HERO BANNER ========== */
+        .hero-banner {
+            position: relative;
+            border-radius: var(--radius-xl);
+            padding: 18px 18px 16px;
+            overflow: hidden;
+            background:
+                radial-gradient(120% 160% at 100% -20%, rgba(232,168,56,0.16) 0%, transparent 55%),
+                radial-gradient(100% 140% at -10% 120%, rgba(201,119,29,0.10) 0%, transparent 50%),
+                linear-gradient(150deg, rgba(232,168,56,0.08), rgba(15,13,10,0.2)),
+                var(--surface-card);
+            border: 1px solid rgba(232,168,56,0.16);
+            box-shadow: 0 12px 44px rgba(0,0,0,0.45), 0 0 90px rgba(232,168,56,0.06);
+        }
+        .hero-glow-1 {
+            position: absolute; top: -70px; left: 50%; transform: translateX(-50%);
+            width: 320px; height: 320px;
+            background: radial-gradient(circle, rgba(232,168,56,0.14) 0%, transparent 70%);
+            pointer-events: none;
+        }
+        .hero-glow-2 {
+            position: absolute; bottom: -80px; right: -60px;
+            width: 240px; height: 240px;
+            background: radial-gradient(circle, rgba(96,165,250,0.08) 0%, transparent 70%);
+            pointer-events: none;
+        }
+        .hero-brand-row { display: flex; align-items: center; gap: 10px; position: relative; z-index: 1; }
+        .hero-logo {
+            width: 38px; height: 38px; border-radius: 12px; flex-shrink: 0;
+            background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+            display: flex; align-items: center; justify-content: center;
+            font-size: 16px; color: #fff;
+            box-shadow: 0 4px 16px rgba(232,168,56,0.35);
+        }
+        .hero-brand-info { flex: 1; min-width: 0; }
+        .hero-church { font-size: 13px; font-weight: 800; letter-spacing: -0.2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .hero-tagline { font-size: 11px; color: var(--text-tertiary); font-weight: 500; margin-top: 1px; }
+        .hero-pills { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+        .hero-pill {
+            display: flex; align-items: center; gap: 5px;
+            padding: 4px 10px; border-radius: 20px;
+            font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+            white-space: nowrap;
+        }
+        .hero-pill.live { background: rgba(52,211,153,0.12); color: var(--success); border: 1px solid rgba(52,211,153,0.2); }
+        .hero-pill.off { background: rgba(117,112,106,0.12); color: var(--text-tertiary); border: 1px solid var(--border); }
+        .hero-pill.blue { background: rgba(96,165,250,0.12); color: #60A5FA; border: 1px solid rgba(96,165,250,0.22); }
+        .hero-pill-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+        .hero-pill.live .hero-pill-dot { background: var(--success); animation: livePulse 1.5s ease-in-out infinite; }
+        .hero-pill.blue .hero-pill-dot { background: #60A5FA; animation: livePulse 1.5s ease-in-out infinite; }
+        .hero-pill.off .hero-pill-dot { background: var(--text-tertiary); }
+
+        .hero-greeting { position: relative; z-index: 1; margin-top: 18px; }
+        .hero-hello { font-size: 13px; color: var(--text-secondary); font-weight: 600; }
+        .hero-name {
+            font-size: 26px; font-weight: 800; letter-spacing: -0.8px; margin-top: 2px;
+            background: linear-gradient(120deg, #fff 30%, rgba(232,168,56,0.9));
+            -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+            color: #fff;
+        }
+        .hero-wave { display: inline-block; animation: heroWave 2.2s ease-in-out infinite; transform-origin: 70% 70%; }
+        @keyframes heroWave { 0%, 100% { transform: rotate(0); } 25% { transform: rotate(16deg); } 50% { transform: rotate(-8deg); } 75% { transform: rotate(12deg); } }
+        .hero-date { font-size: 12px; color: var(--text-tertiary); margin-top: 4px; font-weight: 500; }
+
+        .hero-cta-row { display: flex; gap: 8px; margin-top: 16px; position: relative; z-index: 1; }
+        .hero-cta {
+            flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px;
+            padding: 11px 12px; border-radius: var(--radius-sm);
+            background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+            border: none; color: #fff; font-size: 12px; font-weight: 700;
+            cursor: pointer; transition: all 0.2s ease;
+            box-shadow: 0 6px 20px rgba(232,168,56,0.25);
+        }
+        .hero-cta:active { transform: scale(0.96); }
+        .hero-cta.ghost {
+            background: rgba(255,255,255,0.04);
+            border: 1px solid var(--border);
+            box-shadow: none;
+            color: var(--text-primary);
+        }
+        .hero-cta.ghost:active { background: var(--surface-elevated); }
+
+        /* ========== QUICK ACTIONS ========== */
+        .qa-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+        .qa-tile {
+            position: relative;
+            display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+            padding: 14px; border-radius: var(--radius-lg);
+            background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0) 50%), var(--surface-card);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            cursor: pointer; text-align: left;
+            transition: all 0.25s ease; overflow: hidden;
+        }
+        .qa-tile:hover { border-color: rgba(232,168,56,0.22); transform: translateY(-2px); box-shadow: 0 10px 28px rgba(0,0,0,0.35); }
+        .qa-tile:active { transform: scale(0.97); }
+        .qa-icon {
+            width: 36px; height: 36px; border-radius: 11px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 15px;
+        }
+        .qa-label { font-size: 13px; font-weight: 700; margin-top: 2px; }
+        .qa-desc { font-size: 10.5px; color: var(--text-tertiary); font-weight: 500; line-height: 1.3; }
+        .qa-chev { position: absolute; top: 14px; right: 12px; font-size: 10px; color: var(--text-tertiary); opacity: 0.6; transition: all 0.2s; }
+        .qa-tile:hover .qa-chev { color: var(--primary); opacity: 1; transform: translateX(2px); }
+
+        /* ========== DESKTOP GRIDS ========== */
+        @media (min-width: 1024px) {
+            .dash-grid { display: grid; grid-template-columns: 3fr 2fr; gap: 20px; align-items: start; }
+        }
+
+        /* ========== RESPONSIVE GUTTER UNIFICATION ========== */
+        @media (min-width: 768px) {
+            .content-scroll { padding-left: 0 !important; padding-right: 0 !important; }
+            .feed-section { --section-px: 24px; }
+            .qa-grid { grid-template-columns: repeat(3, 1fr); gap: 12px; }
+        }
+        @media (min-width: 1024px) {
+            .feed-section { --section-px: 32px; }
+        }
+
+        /* ========== ENTRANCE ANIMATIONS ========== */
+        @keyframes riseIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .hero-banner { animation: riseIn 0.45s ease both; }
+        .stats-grid .stat-card { animation: riseIn 0.45s ease both; }
+        .stats-grid .stat-card:nth-child(2) { animation-delay: 0.05s; }
+        .stats-grid .stat-card:nth-child(3) { animation-delay: 0.1s; }
+        .stats-grid .stat-card:nth-child(4) { animation-delay: 0.15s; }
+        .qa-tile { animation: riseIn 0.45s ease both; }
+        .qa-tile:nth-child(2) { animation-delay: 0.04s; }
+        .qa-tile:nth-child(3) { animation-delay: 0.08s; }
+        .qa-tile:nth-child(4) { animation-delay: 0.12s; }
+        .qa-tile:nth-child(5) { animation-delay: 0.16s; }
+        .qa-tile:nth-child(6) { animation-delay: 0.2s; }
       `}</style>
 
       <ToastBridge />
@@ -1868,13 +1900,9 @@ export default function AdminPage() {
                 </div>
               )}
 
-              <button className="tv-start-btn" onClick={handleStartTv} title={tvStartCountdown > 0 ? `Ready in ${tvStartCountdown}s` : "Skip to next video"} disabled={tvStartCountdown > 0}>
+              <button className="tv-start-btn" onClick={handleStartTv} title={tvTransitioning ? "Loading…" : tvStartCountdown > 0 ? `Ready in ${tvStartCountdown}s` : "Continue watching"} disabled={tvTransitioning || tvStartCountdown > 0}>
                 <i className="fas fa-play"></i>
                 <span>{tvStartCountdown > 0 ? `Starting in ${tvStartCountdown}s` : 'Start TV'}</span>
-              </button>
-              <button className="tv-start-btn" onClick={() => router.push("/oracle-tv")} style={{ background: "linear-gradient(135deg, #8B5CF6, #6D28D9)" }}>
-                <i className="fas fa-tower-broadcast"></i>
-                <span>Oracle TV Live</span>
               </button>
               <div className="tv-start-hint">Click to switch playlist</div>
 
@@ -1884,6 +1912,68 @@ export default function AdminPage() {
                   <span>Your TV playlist is empty — add videos from the TV page</span>
                 </div>
               )}
+            </div>
+          </section>
+
+          {/* ─── HERO BANNER ─── */}
+          <section className="feed-section">
+            <div className="hero-banner">
+              <div className="hero-glow-1"></div>
+              <div className="hero-glow-2"></div>
+
+              <div className="hero-brand-row">
+                <div className="hero-logo">
+                  <i className="fas fa-cross"></i>
+                </div>
+                <div className="hero-brand-info">
+                  <div className="hero-church">{churchInfo.name}</div>
+                  <div className="hero-tagline">{churchInfo.tagline || "Worship · Word · Community"}</div>
+                </div>
+                <div className="hero-pills">
+                  <div className={`hero-pill ${radioBackendRunning ? "live" : "off"}`}>
+                    <span className="hero-pill-dot"></span>
+                    {radioBackendRunning ? "On Air" : "Off Air"}
+                  </div>
+                  <div className={`hero-pill ${tvCurrentVideo ? "live blue" : "off"}`}>
+                    <span className="hero-pill-dot"></span>
+                    {tvCurrentVideo ? "TV Live" : "TV Off"}
+                  </div>
+                </div>
+              </div>
+
+              <div className="hero-greeting">
+                <div className="hero-hello">Good {greetingTime}</div>
+                <div className="hero-name">{firstName} <span className="hero-wave">👋</span></div>
+                <div className="hero-date">{todayLabel}</div>
+              </div>
+
+              <div className="hero-cta-row">
+                <button className="hero-cta" onClick={() => router.push("/admin/tv")}>
+                  <i className="fas fa-tv"></i> Church TV
+                </button>
+              </div>
+            </div>
+          </section>
+
+          {/* ─── QUICK ACTIONS ─── */}
+          <section className="feed-section">
+            <div className="section-header-inline">
+              <h2 className="section-title">Manage Church</h2>
+              <button className="section-link" onClick={() => window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Admin", message: "All management tools in one place", type: "info", duration: 2000 } }))}>
+                All Tools <i className="fas fa-chevron-right"></i>
+              </button>
+            </div>
+            <div className="qa-grid">
+              {quickActions.map((qa) => (
+                <button key={qa.route} className="qa-tile" onClick={() => router.push(qa.route)}>
+                  <div className="qa-icon" style={{ background: `${qa.color}18`, color: qa.color, boxShadow: `0 4px 14px ${qa.color}25` }}>
+                    <i className={`fas ${qa.icon}`}></i>
+                  </div>
+                  <div className="qa-label">{qa.label}</div>
+                  <div className="qa-desc">{qa.desc}</div>
+                  <i className="fas fa-chevron-right qa-chev"></i>
+                </button>
+              ))}
             </div>
           </section>
 
@@ -1957,300 +2047,6 @@ export default function AdminPage() {
             </div>
             <AlbumCarousel />
           </section>
-
-          {/* STAT CARDS */}
-          <div className="stats-grid">
-            {statCards.map((card) => (
-              <div key={card.id} className="stat-card" onClick={() => {
-                window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: card.label, message: `Opening ${card.label.toLowerCase()} details...`, type: "info", duration: 2500 } }));
-              }}>
-                <div className="accent-line" style={{ background: card.colorCode }}></div>
-                <div className="stat-card-head">
-                  <div className="stat-icon-bg" style={{ background: `${card.colorCode}15`, color: card.colorCode }}>
-                    <i className={`fas ${card.icon}`}></i>
-                  </div>
-                  {card.sparkline && card.sparkline.length > 0 && (() => {
-                    const max = Math.max(...card.sparkline!);
-                    const pts = card.sparkline!.map((v: number, i: number) => `${(i / 9) * 100},${20 - (v / max) * 18}`).join(" ");
-                    return (
-                      <svg className="stat-sparkline" viewBox="0 0 100 20" preserveAspectRatio="none">
-                        <polyline points={pts} fill="none" stroke={card.colorCode} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" opacity="0.4" />
-                      </svg>
-                    );
-                  })()}
-                </div>
-                <div className="stat-value">{card.value}</div>
-                <div className="stat-label">{card.label}</div>
-                {card.subtitle && <div className="stat-subtitle">{card.subtitle}</div>}
-                {card.trend && (
-                  <div className={`stat-trend ${card.trend.startsWith("↑") ? "up" : "down"}`}>
-                    <i className="fas fa-arrow-up" style={{ fontSize: "9px" }}></i> {card.trend.replace("↑ ", "").replace("↓ ", "")}
-                  </div>
-                )}
-                {card.progress !== undefined && (
-                  <div className="storage-bar">
-                    <div
-                      className="storage-bar-fill"
-                      style={{
-                        width: `${card.progress}%`,
-                        background: card.progress > 90 ? "#EF4444" : card.progress > 75 ? "#F59E0B" : card.colorCode,
-                      }}
-                    ></div>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-
-          {/* MAIN GRID */}
-          <div className="dash-grid">
-            {/* LEFT COLUMN */}
-            <div className="dash-section">
-
-
-              {/* TODAY AT A GLANCE */}
-              <div className="widget-card">
-                <div className="widget-label">
-                  <i className="fas fa-bolt" style={{ marginRight: 6, color: "var(--primary)" }}></i>
-                  Today at a Glance
-                  <span style={{ marginLeft: "auto", fontSize: 10, fontWeight: 600, color: "var(--text-tertiary)", textTransform: "none", letterSpacing: 0 }}>
-                    <i className="fas fa-circle" style={{ fontSize: 6, color: radioBackendRunning ? "var(--success)" : "var(--error)", marginRight: 4 }}></i>
-                    {radioBackendRunning ? "Live" : "Offline"}
-                  </span>
-                </div>
-
-                {/* Top stats row */}
-                <div className="quickstats-grid">
-                  <div className="qs-item" style={{ cursor: "pointer" }} onClick={() => router.push("/admin/radio")}>
-                    <div className="qs-label">Peak Listeners</div>
-                    <div className="qs-value">{radioPeakListeners || "..."}
-                      <span className="qs-sub">today</span>
-                    </div>
-                  </div>
-                  <div className="qs-item" style={{ cursor: "pointer" }} onClick={() => router.push("/admin/radio")}>
-                    <div className="qs-label">Songs Played</div>
-                    <div className="qs-value">{radioSongsPlayedToday || "..."}
-                      <span className="qs-sub">today</span>
-                    </div>
-                  </div>
-                  <div className="qs-item">
-                    <div className="qs-label">Live Listeners</div>
-                    <div className="qs-value" style={{ color: liveListeners > 0 ? "var(--success)" : "var(--text-tertiary)" }}>
-                      {liveListeners}
-                    </div>
-                  </div>
-                  <div className="qs-item" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    <div className="qs-label">AutoDJ</div>
-                    <button
-                      className="autodj-toggle"
-                      onClick={handleToggleAutoDJ}
-                      disabled={autoDJToggling}
-                      data-running={radioBackendRunning}
-                    >
-                      {autoDJToggling ? (
-                        <i className="fas fa-spinner fa-spin"></i>
-                      ) : radioBackendRunning ? (
-                        <><i className="fas fa-pause"></i> Pause</>
-                      ) : (
-                        <><i className="fas fa-play"></i> Start</>
-                      )}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Current Track mini-now-playing */}
-                <div className="glance-np" onClick={() => router.push("/admin/radio")} style={{ cursor: "pointer" }}>
-                  <AlbumArt className="glance-np-cover" src={nowPlaying.albumArt} size={42} />
-                  <div className="glance-np-info">
-                    <div className="glance-np-label">Now Playing</div>
-                    <div className="glance-np-title">{nowPlaying.title}</div>
-                    <div className="glance-np-artist">{nowPlaying.artist || "No artist"}</div>
-                  </div>
-                  <div className="glance-np-source">
-                    <span className={`source-badge ${radioBackendRunning ? "auto" : "off"}`}>
-                      {nowPlaying.source}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Up Next from queue */}
-                {radioQueue.length > 0 && (
-                  <div className="glance-queue">
-                    <div className="glance-queue-label">
-                      <i className="fas fa-forward-step" style={{ fontSize: 10 }}></i> Up Next ({radioQueue.length})
-                    </div>
-                    <div className="glance-queue-list">
-                      {radioQueue.slice(0, 3).map((item, i) => (
-                        <div className="glance-queue-item" key={i}>
-                          <span className="glance-queue-pos">{i + 1}</span>
-                          <span className="glance-queue-title">{item.song.title}</span>
-                          <span className="glance-queue-artist">{item.song.artist}</span>
-                        </div>
-                      ))}
-                      {radioQueue.length > 3 && (
-                        <div className="glance-queue-more">+{radioQueue.length - 3} more</div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* Recent songs from history */}
-                {radioHistory.length > 0 && (
-                  <div className="glance-recent">
-                    <div className="glance-recent-label">
-                      <i className="fas fa-clock-rotate" style={{ fontSize: 10 }}></i> Recently Played
-                    </div>
-                    <div className="glance-recent-list">
-                      {radioHistory.slice(0, 4).map((item, i) => (
-                        <div className="glance-recent-item" key={i}>
-                          <div className="glance-recent-album">
-                            <AlbumArt className="glance-recent-thumb glance-recent-thumb-fallback" src={item.song?.albumArt} size={24} fallbackIcon="fa-music" />
-                          </div>
-                          <div className="glance-recent-info">
-                            <div className="glance-recent-title">{item.song?.title || "Unknown"}</div>
-                            <div className="glance-recent-artist">{item.song?.artist || ""}</div>
-                          </div>
-                          <div className="glance-recent-time">{item.playedAt ? new Date(item.playedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Listener Activity Chart */}
-                <div className="glance-chart-section">
-                  <div className="glance-chart-header">
-                    <span className="glance-chart-label">Listener Activity</span>
-                    <div className="chart-period-toggle">
-                      <button
-                        className={`chart-period-btn ${chartPeriod === "24h" ? "active" : ""}`}
-                        onClick={() => setChartPeriod("24h")}
-                      >24h</button>
-                      <button
-                        className={`chart-period-btn ${chartPeriod === "7days" ? "active" : ""}`}
-                        onClick={() => setChartPeriod("7days")}
-                      >7d</button>
-                    </div>
-                  </div>
-                  <div className="chart-bar-container">
-                    {liveWeeklyChart.length > 0 ? (
-                      (chartPeriod === "24h" ? liveWeeklyChart.slice(-7) : liveWeeklyChart.slice(-7)).map((v, i) => {
-                        const maxVal = Math.max(...liveWeeklyChart.slice(-7), 1);
-                        return (
-                          <div
-                            key={i}
-                            className={`chart-bar${i === (chartPeriod === "24h" ? 6 : 6) ? " today" : ""}`}
-                            style={{ height: `${(v / maxVal) * 100}%` }}
-                            title={`${v} listeners`}
-                          ></div>
-                        );
-                      })
-                    ) : (
-                      <div className="chart-empty">Waiting for data...</div>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-
-
-
-            </div>
-
-            {/* RIGHT COLUMN */}
-            <div className="dash-section">
-              {/* STATION STATUS */}
-              <div className="swidget">
-                <div className="swidget-header">
-                  <div className="swidget-title">
-                    <i className="fas fa-tower-broadcast"></i> Station Status
-                  </div>
-                </div>
-                <div className="status-row">
-                  <div className="status-name">
-                    <div className={`status-dot ${radioBackendRunning ? "on" : "off"}`}></div>
-                    Icecast (Frontend)
-                  </div>
-                  <span style={{ fontSize: 12, color: radioBackendRunning ? "var(--success)" : "var(--error)", fontWeight: 600 }}>
-                    {radioBackendRunning ? "Running" : "Offline"}
-                  </span>
-                </div>
-                <div className="status-row">
-                  <div className="status-name">
-                    <div className={`status-dot ${radioBackendRunning ? "on" : "off"}`}></div>
-                    Liquidsoap (AutoDJ)
-                  </div>
-                  <span style={{ fontSize: 12, color: radioBackendRunning ? "var(--success)" : "var(--error)", fontWeight: 600 }}>
-                    {radioBackendRunning ? "Running" : "Offline"}
-                  </span>
-                </div>
-                <div className="status-uptime">
-                  <i className="fas fa-clock" style={{ marginRight: 6, color: "var(--text-tertiary)" }}></i>
-                  {stationUptime ? `Running for ${stationUptime}` : "No uptime data"}
-                </div>
-
-                <div className="status-actions">
-                  <button className="stat-btn restart" disabled={autoDJToggling} onClick={handleToggleAutoDJ}>
-                    {autoDJToggling ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-rotate"></i>} {radioBackendRunning ? "Pause" : "Start"} AutoDJ
-                  </button>
-                </div>
-              </div>
-
-              {/* ACTIVE DJs */}
-              <div className="swidget">
-                <div className="swidget-header">
-                  <div className="swidget-title">
-                    <i className="fas fa-microphone"></i> Active DJs
-                  </div>
-                  <span style={{ fontSize: 12, color: "var(--text-tertiary)", fontWeight: 600 }}>{liveStreamers.length}</span>
-                </div>
-                {liveStreamers.length === 0 ? (
-                  <div style={{ textAlign: "center", padding: "16px 0", color: "var(--text-secondary)", fontSize: 13 }}>
-                    <i className="fas fa-circle-info" style={{ marginRight: 6, color: "var(--text-tertiary)" }}></i>
-                    No DJs configured yet
-                  </div>
-                ) : (
-                  liveStreamers.slice(0, 5).map((dj) => (
-                    <div className="dj-item" key={dj.id}>
-                      <div className="dj-avatar">
-                        {dj.isLive && <div className="live-ring"></div>}
-                        {(dj.displayName || dj.username)[0]?.toUpperCase() || "?"}
-                      </div>
-                      <div className="dj-info">
-                        <div className="dj-name">
-                          {dj.displayName || dj.username || "Unknown"}
-                          {dj.isLive && <span className="live-badge">LIVE</span>}
-                        </div>
-                        <div className="dj-username">@{dj.username}</div>
-                      </div>
-                      <div className="dj-last">
-                        {dj.isLive ? "Now" : dj.lastBroadcast ? timeAgo(new Date(dj.lastBroadcast)) : "Never"}
-                      </div>
-                      <div className="dj-actions">
-                        <button className="dj-action-btn" title="Edit" onClick={() => window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Edit DJ", message: `Editing ${dj.displayName || dj.username}...`, type: "info", duration: 2000 } }))}>
-                          <i className="fas fa-pen"></i>
-                        </button>
-                        <button className="dj-action-btn danger" title="Remove" disabled={streamDeletingId === dj.id} onClick={() => handleDeleteStreamer(dj.id, dj.displayName || dj.username)}>
-                          {streamDeletingId === dj.id ? (
-                            <i className="fas fa-spinner fa-spin"></i>
-                          ) : (
-                            <i className="fas fa-xmark"></i>
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                  ))
-                )}
-                <button className="add-dj-btn" onClick={() => window.dispatchEvent(new CustomEvent("show-toast", { detail: { title: "Add DJ", message: "Opening add DJ form...", type: "info", duration: 2000 } }))}>
-                  <i className="fas fa-plus" style={{ marginRight: 6 }}></i> Add DJ
-                </button>
-                <a className="view-all-link" href="/admin/radio">View all {liveStreamers.length} DJs →</a>
-              </div>
-
-
-
-            </div>
-          </div>
 
         </div>
 

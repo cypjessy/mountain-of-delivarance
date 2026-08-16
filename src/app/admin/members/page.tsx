@@ -99,29 +99,29 @@ export default function AdminMembersPage() {
         :root {
             --primary: #E8A838;
             --primary-light: #F5C76B;
-            --primary-dark: #C48A2A;
-            --bg: #0F0F0F;
-            --surface: #1A1A1A;
-            --surface-elevated: #242424;
-            --surface-card: #1E1E1E;
-            --surface-hover: #2A2A2A;
-            --text-primary: #FFFFFF;
-            --text-secondary: #A0A0A0;
-            --text-tertiary: #6B6B6B;
-            --border: #2A2A2A;
-            --error: #FF6B6B;
-            --success: #4ADE80;
-            --info: #38BDF8;
+            --primary-dark: #B98A1F;
+            --bg: #0F0D0A;
+            --surface: #181512;
+            --surface-elevated: #23201B;
+            --surface-card: #1C1915;
+            --surface-hover: #2B2720;
+            --text-primary: #F7F5F0;
+            --text-secondary: #A8A39A;
+            --text-tertiary: #75706A;
+            --border: #2B2720;
+            --error: #F87171;
+            --success: #34D399;
+            --info: #60A5FA;
             --warning: #FBBF24;
             --overlay: rgba(0,0,0,0.92);
             --gradient-start: #E8A838;
-            --gradient-end: #D4762A;
-            --gradient-purple: #8B5CF6;
-            --gradient-blue: #3B82F6;
-            --gradient-red: #EF4444;
-            --gradient-green: #22C55E;
-            --shadow-soft: 0 4px 20px rgba(232,168,56,0.15);
-            --shadow-elevated: 0 8px 32px rgba(0,0,0,0.5);
+            --gradient-end: #C9771D;
+            --gradient-purple: #A78BFA;
+            --gradient-blue: #60A5FA;
+            --gradient-red: #F87171;
+            --gradient-green: #34D399;
+            --shadow-soft: 0 4px 20px rgba(232,168,56,0.16);
+            --shadow-elevated: 0 10px 36px rgba(0,0,0,0.55);
             --radius-sm: 12px;
             --radius-md: 16px;
             --radius-lg: 20px;
@@ -227,7 +227,7 @@ export default function AdminMembersPage() {
             overflow-y: auto;
             overflow-x: hidden;
             -webkit-overflow-scrolling: touch;
-            padding-bottom: 100px;
+            padding-bottom: calc(100px + env(safe-area-inset-bottom, 0px));
         }
 
         .content-scroll::-webkit-scrollbar {

@@ -4,6 +4,47 @@ html, body {
   text-size-adjust: 100%;
 }
 
+/* ── Global mobile hardening (Android WebView) ── */
+
+/* Kill the grey/blue overscroll glow and pull-to-refresh chaining that
+   fires when the inner scroll containers hit their edge on Android. */
+html, body {
+  overscroll-behavior-y: none;
+}
+
+/* Guarantee no sideways scrolling on narrow phones, even on pages that
+   forget to clip. `clip` is preferred over `hidden` because it does NOT
+   create a scroll container, so `position: sticky` children keep working. */
+html, body {
+  overflow-x: clip;
+}
+@supports not (overflow-x: clip) {
+  html, body {
+    overflow-x: hidden;
+  }
+}
+
+/* ── Minimum touch target sizes (44px) across the app shell ──
+   Buttons below this are hard to hit on small phones. */
+.nav-item,
+.ptb-back,
+.dh-btn,
+.header-back,
+.tv-top-header-btn,
+.media-modal-close {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+/* "View All" section links get a larger hit area without moving the label */
+.section-link {
+  min-height: 32px;
+  padding: 4px 2px;
+}
+
+/* All page-level CSS lives inside each page component.
+   This file only contains global responsive overrides. */
+
 /* All page-level CSS lives inside each page component.
    This file only contains global responsive overrides. */
 

@@ -111,8 +111,8 @@ The app is a **Next.js 16** single-page church application serving both as a **r
 | Variable | Value |
 |----------|-------|
 | URL | `https://azuracast.histoview.co.ke` |
-| API Key | `27b63ceb8aa83480:2b36bb02900b47e87303afe30e87a557` |
-| Station ID | `5` |
+| API Key | `2c967fbe7a344cea:6ecd94accefdda619c01c06de4122e3e` |
+| Station ID | `2` |
 | Stream URL | `https://azuracast.histoview.co.ke/listen/mountain_of_delivarance_church/radio.mp3` |
 | Public Embed URL | `https://azuracast.histoview.co.ke/public/mountain_of_delivarance_church` |
 | Station Shortcode | `mountain_of_delivarance_church` |
@@ -506,9 +506,9 @@ NEXT_PUBLIC_MAX_UPLOAD_SIZE_MB=10
 # AZURACAST
 # ============================================================
 NEXT_PUBLIC_AZURACAST_URL=https://azuracast.histoview.co.ke
-NEXT_PUBLIC_AZURACAST_API_KEY=27b63ceb8aa83480:2b36bb02900b47e87303afe30e87a557
+NEXT_PUBLIC_AZURACAST_API_KEY=2c967fbe7a344cea:6ecd94accefdda619c01c06de4122e3e
 NEXT_PUBLIC_STREAM_URL=https://azuracast.histoview.co.ke/listen/mountain_of_delivarance_church/radio.mp3
-NEXT_PUBLIC_STATION_ID=5
+NEXT_PUBLIC_STATION_ID=2
 NEXT_PUBLIC_AZURACAST_PUBLIC_EMBED_URL=https://azuracast.histoview.co.ke/public/mountain_of_delivarance_church
 
 # ============================================================

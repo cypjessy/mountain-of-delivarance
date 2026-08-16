@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
-  getChannel, getVideos, getVideosPage, saveChannel, saveVideos, clearAllVideos,
+  getChannel, getVideos, getVideosPage, saveChannel, saveVideos,
   getPlaylists, addPlaylist, deletePlaylist,
   generateBroadcast, getTodayBroadcast,
   getGivingConfig, saveGivingConfig,
@@ -250,7 +250,7 @@ export default function AdminTVPage() {
       await saveChannel(data.channel);
       setChannel(data.channel);
 
-      await clearAllVideos();
+      // Save/update videos without deleting existing ones (merge preserves user edits)
       if (data.videos.length > 0) {
         await saveVideos(data.videos);
       }
@@ -1535,12 +1535,12 @@ export default function AdminTVPage() {
     <>
       <style>{`
         :root {
-          --primary: #E8A838; --primary-light: #F5C76B; --bg: #0F0F0F;
-          --surface: #1A1A1A; --surface-elevated: #242424;
-          --surface-card: #1E1E1E; --surface-hover: #2A2A2A;
-          --text-primary: #FFFFFF; --text-secondary: #A0A0A0; --text-tertiary: #6B6B6B;
-          --border: #2A2A2A; --error: #EF4444; --success: #22C55E;
-          --gradient-start: #E8A838; --gradient-end: #D4762A;
+          --primary: #E8A838; --primary-light: #F5C76B; --bg: #0F0D0A;
+          --surface: #181512; --surface-elevated: #23201B;
+          --surface-card: #1C1915; --surface-hover: #2B2720;
+          --text-primary: #F7F5F0; --text-secondary: #A8A39A; --text-tertiary: #75706A;
+          --border: #2B2720; --error: #F87171; --success: #34D399;
+          --gradient-start: #E8A838; --gradient-end: #C9771D;
           --radius-sm: 12px; --radius-md: 16px; --radius-lg: 20px; --radius-xl: 24px;
           --radius-full: 50%;
         }
@@ -1563,7 +1563,7 @@ export default function AdminTVPage() {
         .header-title { font-size: 16px; font-weight: 700; }
         .header-sub { font-size: 11px; color: var(--text-tertiary); margin-top: 1px; }
 
-        .content-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; padding-bottom: 80px; }
+        .content-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; padding-bottom: calc(80px + env(safe-area-inset-bottom, 0px)); }
         .content-scroll::-webkit-scrollbar { display: none; }
 
         .section { padding: 0 12px 16px; display: flex; flex-direction: column; gap: 12px; }

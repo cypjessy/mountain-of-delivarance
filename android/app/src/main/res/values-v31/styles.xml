@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Android 12+ system splash screen.
+         The default system splash flashes the app icon before the WebView loads.
+         We suppress that icon flash (transparent animated icon on the dark
+         background) so the user goes straight to the image splash. -->
+    <style name="AppTheme.NoActionBarLaunch" parent="AppTheme">
+        <item name="android:windowSplashScreenBackground">#0F0F0F</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
+        <item name="android:windowSplashScreenAnimationDuration">0</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@android:color/transparent</item>
+        <item name="android:windowBackground">#0F0F0F</item>
+        <item name="android:background">#0F0F0F</item>
+    </style>
+
+</resources>

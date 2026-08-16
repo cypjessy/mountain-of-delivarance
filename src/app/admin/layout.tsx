@@ -12,7 +12,7 @@ function useStatusBar() {
       try {
         const { StatusBar, Style } = await import("@capacitor/status-bar");
         await StatusBar.setStyle({ style: Style.Dark });
-        await StatusBar.setBackgroundColor({ color: "#0F0F0F" });
+        await StatusBar.setBackgroundColor({ color: "#0F0D0A" });
       } catch {}
     })();
   }, []);
@@ -42,7 +42,7 @@ export default function AdminLayout({
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          background: "#0F0F0F",
+          background: "#0F0D0A",
           color: "#fff",
           fontFamily: "Inter, sans-serif",
         }}
@@ -51,7 +51,7 @@ export default function AdminLayout({
           style={{
             width: 48,
             height: 48,
-            border: "3px solid #242424",
+            border: "3px solid #23201B",
             borderTopColor: "#E8A838",
             borderRadius: "50%",
             animation: "spin 0.8s linear infinite",

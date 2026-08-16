@@ -176,6 +176,7 @@ export default function LoginForm() {
         <div className="login-hero-logo">
           <i className="fas fa-cross"></i>
         </div>
+        <div className="login-eyebrow">Mountain of Deliverance Church</div>
         <h1>Welcome Back</h1>
         <p>Sign in to access your church&apos;s live radio, sermons, and media</p>
       </div>

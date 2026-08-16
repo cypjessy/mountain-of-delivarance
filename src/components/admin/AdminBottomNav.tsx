@@ -69,7 +69,7 @@ export default function AdminBottomNav() {
   return (
     <>
       <style>{`
-        .nav-live-dot { position: absolute; top: 1px; right: 8px; width: 8px; height: 8px; background: #EF4444; border-radius: 50%; border: 2px solid var(--bg,#0F0F0F); animation: navLivePulse 1.5s ease-in-out infinite; }
+        .nav-live-dot { position: absolute; top: 1px; right: 8px; width: 8px; height: 8px; background: #F87171; border-radius: 50%; border: 2px solid var(--bg,#0F0D0A); animation: navLivePulse 1.5s ease-in-out infinite; }
         @keyframes navLivePulse { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.3); opacity: 0.6; } }
       `}</style>
     <nav className={showSidebar ? "admin-sidebar" : "bottom-nav"}>

@@ -739,21 +739,21 @@ export default function AdminMeetingHostPage() {
         :root {
           --primary: #E8A838;
           --primary-light: #F5C76B;
-          --primary-dark: #C48A2A;
-          --bg: #0A0A0F;
+          --primary-dark: #B98A1F;
+          --bg: #0D0B08;
           --surface: rgba(255,255,255,0.04);
           --surface-hover: rgba(255,255,255,0.08);
           --border: rgba(255,255,255,0.06);
           --text-primary: #FFFFFF;
           --text-secondary: rgba(255,255,255,0.6);
           --text-tertiary: rgba(255,255,255,0.35);
-          --success: #4ADE80;
-          --error: #FF6B6B;
-          --info: #38BDF8;
+          --success: #34D399;
+          --error: #F87171;
+          --info: #60A5FA;
           --gradient-start: #E8A838;
-          --gradient-end: #D4762A;
-          --gradient-blue: #3B82F6;
-          --gradient-purple: #8B5CF6;
+          --gradient-end: #C9771D;
+          --gradient-blue: #60A5FA;
+          --gradient-purple: #A78BFA;
           --shadow-glow: 0 0 30px rgba(232,168,56,0.15);
         }
 

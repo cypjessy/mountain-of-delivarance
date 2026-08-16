@@ -51,8 +51,6 @@ const church = {
   logoInitials: "TP",
 };
 
-const memberName = "Derick";
-
 /* ==================================================================
    HELPERS
    ================================================================== */
@@ -376,6 +374,9 @@ export default function DashboardPage() {
   const storeLogout = useAppStore((s) => s.logout);
   const greeting = getGreeting();
   const userDoc = useAppStore((s) => s.userDoc);
+  const authUser = useAppStore((s) => s.user);
+  const firstName = (userDoc?.display_name || authUser?.displayName || "").trim().split(" ")[0] || "Guest";
+  const todayLabel = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
 
   const [showOnboarding, setShowOnboarding] = useState(() => {
     // Check Firestore first (persists across devices), then localStorage fallback
@@ -450,6 +451,8 @@ export default function DashboardPage() {
   const [tvStartCountdown, setTvStartCountdown] = useState(20);
   const lastTvSeekRef = useRef(0);
   const lastTvIndexRef = useRef(0);
+  const tvTransitioningRef = useRef(false);
+  const [tvTransitioning, setTvTransitioning] = useState(false);
   const tvPlayer = useTvPlayer();
   const { toggleFullscreen } = useFullscreenToggle();
 
@@ -665,53 +668,79 @@ export default function DashboardPage() {
     return () => { mounted = false; };
   }, []);
 
-  /* Start TV — always advances to the next video in the playlist.
-     If no playlist exists yet, auto-initialises one and plays the first video.
-     Progress is saved periodically by the 5s interval once the new video plays. */
-  const handleStartTv = useCallback(async () => {
-    if (!tvUserState || tvUserState.playlist.length === 0) {
-      const uid = auth.currentUser?.uid;
-      if (uid && tvVideos.length > 0) {
-        const yt = await import("@/lib/youtube");
-        const state = await yt.autoInitUserPlaylist(uid);
-        setTvUserState(state);
-        const firstId = state.playlist[state.currentIndex];
-        if (firstId) tvPlayer.play(firstId, state.currentSeek || 0);
-      } else {
-        window.dispatchEvent(new CustomEvent("show-toast", {
-          detail: { title: "No Videos", message: "No videos available to play. Sync videos from the admin panel.", type: "info", duration: 3000 }
-        }));
-      }
-      return;
+  /** Find the next valid video index going forward from current position (no wrap-around). */
+  const findNextValidVideo = useCallback((currentIndex: number, playlist: string[], validIds: Set<string>): number | null => {
+    for (let i = currentIndex + 1; i < playlist.length; i++) {
+      if (validIds.has(playlist[i])) return i;
     }
-    setShowEndCard(false);
-    const nextIndex = (tvUserState.currentIndex + 1) % tvUserState.playlist.length;
-    const nextId = tvUserState.playlist[nextIndex];
-    const uid = auth.currentUser?.uid;
-    if (uid) await updateUserTvProgress(uid, nextIndex, 0);
-    setTvUserState((prev) => prev ? { ...prev, currentIndex: nextIndex, currentSeek: 0 } : prev);
-    if (nextId) tvPlayer.play(nextId, 0);
-  }, [tvUserState, tvVideos, tvPlayer]);
+    return null;
+  }, []);
 
-  /* Advance TV video when it ends — show end card with next video ready.
-     Stops at the end — never wraps back to index 0. */
+  /* Start TV — advances to the next valid video in the playlist.
+     If no playlist exists yet, auto-initialises one and plays the first video.
+     Twin guards (ref + state) prevent double-clicks during async transitions.
+     Skips any playlist entries whose IDs aren't in the synced video library. */
+  const handleStartTv = useCallback(async () => {
+    if (tvTransitioningRef.current) return;
+    tvTransitioningRef.current = true;
+    setTvTransitioning(true);
+    try {
+      if (!tvUserState || tvUserState.playlist.length === 0) {
+        const uid = auth.currentUser?.uid;
+        if (uid && tvVideos.length > 0) {
+          const yt = await import("@/lib/youtube");
+          const state = await yt.autoInitUserPlaylist(uid);
+          setTvUserState(state);
+          const firstId = state.playlist[state.currentIndex];
+          if (firstId) tvPlayer.play(firstId, state.currentSeek || 0);
+        } else {
+          window.dispatchEvent(new CustomEvent("show-toast", {
+            detail: { title: "No Videos", message: "No videos available to play. Sync videos from the admin panel.", type: "info", duration: 3000 }
+          }));
+        }
+        return;
+      }
+      setShowEndCard(false);
+
+      const validIds = new Set(tvVideos.map((v) => v.id));
+      const nextIndex = findNextValidVideo(tvUserState.currentIndex, tvUserState.playlist, validIds);
+
+      if (nextIndex === null) {
+        window.dispatchEvent(new CustomEvent("show-toast", {
+          detail: { title: "No Videos", message: "No valid videos found in your playlist. Sync videos from the admin panel.", type: "info", duration: 3000 }
+        }));
+        return;
+      }
+
+      const nextId = tvUserState.playlist[nextIndex];
+      const uid = auth.currentUser?.uid;
+      if (uid) await updateUserTvProgress(uid, nextIndex, 0);
+      setTvUserState((prev) => prev ? { ...prev, currentIndex: nextIndex, currentSeek: 0 } : prev);
+      if (nextId) tvPlayer.play(nextId, 0);
+    } finally {
+      tvTransitioningRef.current = false;
+      setTvTransitioning(false);
+    }
+  }, [tvUserState, tvVideos, tvPlayer, findNextValidVideo]);
+
+  /* Advance TV video when it ends — auto-advances to the next valid video.
+     Skips missing entries (no wrap-around — stops at playlist end). */
   const advanceTvVideo = useCallback(() => {
     if (!tvUserState || tvUserState.playlist.length === 0) return;
-    // Save progress immediately before showing end card
+    // Save progress immediately
     const uid = auth.currentUser?.uid;
     if (uid && lastTvSeekRef.current > 0) {
       updateUserTvProgress(uid, lastTvIndexRef.current, lastTvSeekRef.current);
     }
-    // If on the last video, don't show end card — playlist is complete
-    if (tvUserState.currentIndex >= tvUserState.playlist.length - 1) return;
-    // Show end card with the next video info
-    const nextIndex = tvUserState.currentIndex + 1;
-    const nextVideo = tvVideos.find((v) => v.id === tvUserState.playlist[nextIndex]) ?? null;
-    if (nextVideo) {
-      setNextTvVideo(nextVideo);
-      setShowEndCard(true);
-    }
-  }, [tvUserState, tvVideos]);
+    // Find next valid video (skip missing IDs)
+    const validIds = new Set(tvVideos.map((v) => v.id));
+    const nextIndex = findNextValidVideo(tvUserState.currentIndex, tvUserState.playlist, validIds);
+    if (nextIndex === null) return;
+    const nextId = tvUserState.playlist[nextIndex];
+    if (uid) updateUserTvProgress(uid, nextIndex, 0);
+    setTvUserState((prev) => prev ? { ...prev, currentIndex: nextIndex, currentSeek: 0 } : prev);
+    if (nextId) tvPlayer.play(nextId, 0);
+  }, [tvUserState, tvVideos, tvPlayer, findNextValidVideo]);
 
   /* Called when user taps "Continue Watching" — advances and plays the next video.
      Stops at the end — never wraps back to index 0. */
@@ -935,6 +964,14 @@ export default function DashboardPage() {
     const streamerName = npData?.live?.streamerName;
     const stationName = npData?.station?.name || church.name;
     const progressPct = np && np.duration > 0 ? Math.round((np.elapsed / np.duration) * 100) : 0;
+    const quickActions = [
+      { route: "/radio", icon: "fa-tower-broadcast", color: "#E8A838", label: "Radio", desc: "Listen live" },
+      { route: "/tv", icon: "fa-tv", color: "#60A5FA", label: "Church TV", desc: "Watch sermons" },
+      { route: "/give", icon: "fa-hand-holding-heart", color: "#34D399", label: "Give", desc: "Offerings & tithes" },
+      { route: "/meetings", icon: "fa-people-group", color: "#A78BFA", label: "Meetings", desc: "Prayer & events" },
+      { route: "/prayer", icon: "fa-hands-praying", color: "#F87171", label: "Prayer", desc: "Request prayer" },
+      { route: "/gallery", icon: "fa-images", color: "#60A5FA", label: "Gallery", desc: "Church photos" },
+    ];
     return (
     <>
       {/* LIVE BANNER — Radio */}
@@ -1051,13 +1088,9 @@ export default function DashboardPage() {
           )}
 
           {/* Start TV button — always visible */}
-          <button className="tv-start-btn" onClick={handleStartTv} title={tvStartCountdown > 0 ? `Ready in ${tvStartCountdown}s` : "Skip to next video"} disabled={tvStartCountdown > 0}>
+          <button className="tv-start-btn" onClick={handleStartTv} title={tvTransitioning ? "Loading…" : tvStartCountdown > 0 ? `Ready in ${tvStartCountdown}s` : "Continue watching"} disabled={tvTransitioning || tvStartCountdown > 0}>
             <i className="fas fa-play"></i>
             <span>{tvStartCountdown > 0 ? `Starting in ${tvStartCountdown}s` : 'Start TV'}</span>
-          </button>
-          <button className="tv-start-btn" onClick={() => router.push("/oracle-tv")} style={{ background: "linear-gradient(135deg, #8B5CF6, #6D28D9)" }}>
-            <i className="fas fa-tower-broadcast"></i>
-            <span>Oracle TV Live</span>
           </button>
           <div className="tv-start-hint">Click to switch playlist</div>
 
@@ -1071,6 +1104,68 @@ export default function DashboardPage() {
         </div>
       </section>
       )}
+
+      {/* ===== HERO BANNER ===== */}
+      <section className="feed-section">
+        <div className="hero-banner">
+          <div className="hero-glow-1"></div>
+          <div className="hero-glow-2"></div>
+
+          <div className="hero-brand-row">
+            <div className="hero-logo">
+              <i className="fas fa-cross"></i>
+            </div>
+            <div className="hero-brand-info">
+              <div className="hero-church">{church.name}</div>
+              <div className="hero-tagline">{church.tagline || "Worship · Word · Community"}</div>
+            </div>
+            <div className="hero-pills">
+              <div className={`hero-pill ${isPlaying || isLive ? "live" : "off"}`}>
+                <span className="hero-pill-dot"></span>
+                {isPlaying || isLive ? "On Air" : "Off Air"}
+              </div>
+              <div className={`hero-pill ${tvCurrentVideo ? "live blue" : "off"}`}>
+                <span className="hero-pill-dot"></span>
+                {tvCurrentVideo ? "TV Live" : "TV Off"}
+              </div>
+            </div>
+          </div>
+
+          <div className="hero-greeting">
+            <div className="hero-hello">{greeting.text}</div>
+            <div className="hero-name">{firstName} <span className="hero-wave">👋</span></div>
+            <div className="hero-date">{todayLabel}</div>
+          </div>
+
+          <div className="hero-cta-row">
+            <button className="hero-cta" onClick={() => router.push("/radio")}>
+              <i className="fas fa-tower-broadcast"></i> Listen Radio
+            </button>
+            <button className="hero-cta ghost" onClick={() => router.push("/tv")}>
+              <i className="fas fa-tv"></i> Watch TV
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {/* ===== QUICK ACTIONS ===== */}
+      <section className="feed-section">
+        <div className="section-header-inline">
+          <h2 className="section-title">Explore</h2>
+        </div>
+        <div className="qa-grid">
+          {quickActions.map((qa) => (
+            <button key={qa.route} className="qa-tile" onClick={() => router.push(qa.route)}>
+              <div className="qa-icon" style={{ background: `${qa.color}18`, color: qa.color, boxShadow: `0 4px 14px ${qa.color}25` }}>
+                <i className={`fas ${qa.icon}`}></i>
+              </div>
+              <div className="qa-label">{qa.label}</div>
+              <div className="qa-desc">{qa.desc}</div>
+              <i className="fas fa-chevron-right qa-chev"></i>
+            </button>
+          ))}
+        </div>
+      </section>
 
       {/* ===== PREMIUM RADIO HERO CARD ===== */}
       <section className="feed-section">
@@ -1282,27 +1377,27 @@ export default function DashboardPage() {
         :root {
             --primary: #E8A838;
             --primary-light: #F5C76B;
-            --primary-dark: #C48A2A;
-            --bg: #0F0F0F;
-            --surface: #1A1A1A;
-            --surface-elevated: #242424;
-            --surface-card: #1E1E1E;
-            --surface-hover: #2A2A2A;
-            --text-primary: #FFFFFF;
-            --text-secondary: #A0A0A0;
-            --text-tertiary: #6B6B6B;
-            --border: #2A2A2A;
-            --error: #EF4444;
-            --success: #22C55E;
-            --info: #3B82F6;
+            --primary-dark: #B98A1F;
+            --bg: #0F0D0A;
+            --surface: #181512;
+            --surface-elevated: #23201B;
+            --surface-card: #1C1915;
+            --surface-hover: #2B2720;
+            --text-primary: #F7F5F0;
+            --text-secondary: #A8A39A;
+            --text-tertiary: #75706A;
+            --border: #2B2720;
+            --error: #F87171;
+            --success: #34D399;
+            --info: #60A5FA;
             --overlay: rgba(0,0,0,0.92);
             --gradient-start: #E8A838;
-            --gradient-end: #D4762A;
-            --gradient-purple: #8B5CF6;
-            --gradient-blue: #3B82F6;
-            --gradient-green: #22C55E;
-            --shadow-soft: 0 4px 20px rgba(232,168,56,0.15);
-            --shadow-elevated: 0 8px 32px rgba(0,0,0,0.45);
+            --gradient-end: #C9771D;
+            --gradient-purple: #A78BFA;
+            --gradient-blue: #60A5FA;
+            --gradient-green: #34D399;
+            --shadow-soft: 0 4px 20px rgba(232,168,56,0.16);
+            --shadow-elevated: 0 10px 36px rgba(0,0,0,0.55);
             --radius-sm: 12px;
             --radius-md: 16px;
             --radius-lg: 20px;
@@ -1311,7 +1406,7 @@ export default function DashboardPage() {
         }
         * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
         html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text-primary); }
-        .app-container { height: 100%; display: flex; flex-direction: column; position: relative; overflow: hidden; }
+        .app-container { height: 100%; display: flex; flex-direction: column; position: relative; overflow: hidden; background: radial-gradient(900px 420px at 50% -140px, rgba(232,168,56,0.07) 0%, transparent 70%), var(--bg); }
         @media (min-width: 480px) { .app-container { max-width: 480px; margin: 0 auto; } }
         @media (min-width: 768px) {
             .feed-section { --section-px: 24px; padding: 0 var(--section-px) 20px; }
@@ -1393,7 +1488,7 @@ export default function DashboardPage() {
 
         /* ===== CONTENT SCROLL ===== */
         .content-scroll { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: 0; }
-        .content-scroll > :last-child { margin-bottom: 72px; }
+        .content-scroll > :last-child { margin-bottom: calc(72px + env(safe-area-inset-bottom, 0px)); }
         .content-scroll::-webkit-scrollbar { display: none; }
 
         .feed-section { padding: 0 var(--section-px, 16px) 16px; }
@@ -2543,6 +2638,131 @@ export default function DashboardPage() {
             border-radius: var(--radius-full);
             border: 2px solid var(--bg);
         }
+
+        /* ========== PREMIUM HERO BANNER ========== */
+        .hero-banner {
+            position: relative;
+            border-radius: var(--radius-xl);
+            padding: 18px 18px 16px;
+            overflow: hidden;
+            background:
+                radial-gradient(120% 160% at 100% -20%, rgba(232,168,56,0.16) 0%, transparent 55%),
+                radial-gradient(100% 140% at -10% 120%, rgba(201,119,29,0.10) 0%, transparent 50%),
+                linear-gradient(150deg, rgba(232,168,56,0.08), rgba(15,13,10,0.2)),
+                var(--surface-card);
+            border: 1px solid rgba(232,168,56,0.16);
+            box-shadow: 0 12px 44px rgba(0,0,0,0.45), 0 0 90px rgba(232,168,56,0.06);
+        }
+        .hero-glow-1 {
+            position: absolute; top: -70px; left: 50%; transform: translateX(-50%);
+            width: 320px; height: 320px;
+            background: radial-gradient(circle, rgba(232,168,56,0.14) 0%, transparent 70%);
+            pointer-events: none;
+        }
+        .hero-glow-2 {
+            position: absolute; bottom: -80px; right: -60px;
+            width: 240px; height: 240px;
+            background: radial-gradient(circle, rgba(96,165,250,0.08) 0%, transparent 70%);
+            pointer-events: none;
+        }
+        .hero-brand-row { display: flex; align-items: center; gap: 10px; position: relative; z-index: 1; }
+        .hero-logo {
+            width: 38px; height: 38px; border-radius: 12px; flex-shrink: 0;
+            background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+            display: flex; align-items: center; justify-content: center;
+            font-size: 16px; color: #fff;
+            box-shadow: 0 4px 16px rgba(232,168,56,0.35);
+        }
+        .hero-brand-info { flex: 1; min-width: 0; }
+        .hero-church { font-size: 13px; font-weight: 800; letter-spacing: -0.2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .hero-tagline { font-size: 11px; color: var(--text-tertiary); font-weight: 500; margin-top: 1px; }
+        .hero-pills { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+        .hero-pill {
+            display: flex; align-items: center; gap: 5px;
+            padding: 4px 10px; border-radius: 20px;
+            font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+            white-space: nowrap;
+        }
+        .hero-pill.live { background: rgba(52,211,153,0.12); color: var(--success); border: 1px solid rgba(52,211,153,0.2); }
+        .hero-pill.off { background: rgba(117,112,106,0.12); color: var(--text-tertiary); border: 1px solid var(--border); }
+        .hero-pill.blue { background: rgba(96,165,250,0.12); color: var(--info); border: 1px solid rgba(96,165,250,0.22); }
+        .hero-pill-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+        .hero-pill.live .hero-pill-dot { background: var(--success); animation: livePulse 1.5s ease-in-out infinite; }
+        .hero-pill.blue .hero-pill-dot { background: var(--info); animation: livePulse 1.5s ease-in-out infinite; }
+        .hero-pill.off .hero-pill-dot { background: var(--text-tertiary); }
+
+        .hero-greeting { position: relative; z-index: 1; margin-top: 18px; }
+        .hero-hello { font-size: 13px; color: var(--text-secondary); font-weight: 600; }
+        .hero-name {
+            font-size: 26px; font-weight: 800; letter-spacing: -0.8px; margin-top: 2px;
+            background: linear-gradient(120deg, #fff 30%, rgba(232,168,56,0.9));
+            -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+            color: #fff;
+        }
+        .hero-wave { display: inline-block; animation: heroWave 2.2s ease-in-out infinite; transform-origin: 70% 70%; }
+        @keyframes heroWave { 0%, 100% { transform: rotate(0); } 25% { transform: rotate(16deg); } 50% { transform: rotate(-8deg); } 75% { transform: rotate(12deg); } }
+        .hero-date { font-size: 12px; color: var(--text-tertiary); margin-top: 4px; font-weight: 500; }
+
+        .hero-cta-row { display: flex; gap: 8px; margin-top: 16px; position: relative; z-index: 1; }
+        .hero-cta {
+            flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px;
+            padding: 11px 12px; border-radius: var(--radius-sm);
+            background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+            border: none; color: #fff; font-size: 12px; font-weight: 700;
+            cursor: pointer; transition: all 0.2s ease;
+            box-shadow: 0 6px 20px rgba(232,168,56,0.25);
+        }
+        .hero-cta:active { transform: scale(0.96); }
+        .hero-cta.ghost {
+            background: rgba(255,255,255,0.04);
+            border: 1px solid var(--border);
+            box-shadow: none;
+            color: var(--text-primary);
+        }
+        .hero-cta.ghost:active { background: var(--surface-elevated); }
+
+        /* ========== QUICK ACTIONS ========== */
+        .qa-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+        .qa-tile {
+            position: relative;
+            display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+            padding: 14px; border-radius: var(--radius-lg);
+            background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0) 50%), var(--surface-card);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            cursor: pointer; text-align: left;
+            transition: all 0.25s ease; overflow: hidden;
+        }
+        .qa-tile:hover { border-color: rgba(232,168,56,0.22); transform: translateY(-2px); box-shadow: 0 10px 28px rgba(0,0,0,0.35); }
+        .qa-tile:active { transform: scale(0.97); }
+        .qa-icon {
+            width: 36px; height: 36px; border-radius: 11px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 15px;
+        }
+        .qa-label { font-size: 13px; font-weight: 700; margin-top: 2px; }
+        .qa-desc { font-size: 10.5px; color: var(--text-tertiary); font-weight: 500; line-height: 1.3; }
+        .qa-chev { position: absolute; top: 14px; right: 12px; font-size: 10px; color: var(--text-tertiary); opacity: 0.6; transition: all 0.2s; }
+        .qa-tile:hover .qa-chev { color: var(--primary); opacity: 1; transform: translateX(2px); }
+
+        /* ========== RESPONSIVE GUTTER UNIFICATION ========== */
+        @media (min-width: 768px) {
+            .content-scroll { padding-left: 0 !important; padding-right: 0 !important; }
+            .qa-grid { grid-template-columns: repeat(3, 1fr); gap: 12px; }
+        }
+        @media (min-width: 1024px) {
+            .feed-section { --section-px: 32px; }
+        }
+
+        /* ========== ENTRANCE ANIMATIONS ========== */
+        @keyframes riseIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .hero-banner { animation: riseIn 0.45s ease both; }
+        .qa-tile { animation: riseIn 0.45s ease both; }
+        .qa-tile:nth-child(2) { animation-delay: 0.04s; }
+        .qa-tile:nth-child(3) { animation-delay: 0.08s; }
+        .qa-tile:nth-child(4) { animation-delay: 0.12s; }
+        .qa-tile:nth-child(5) { animation-delay: 0.16s; }
+        .qa-tile:nth-child(6) { animation-delay: 0.2s; }
       `}</style>
 
       <ToastBridge />
@@ -2617,8 +2837,8 @@ export default function DashboardPage() {
               <i className="fas fa-cross"></i>
             </div>
             <div className="dh-greeting">
-              <div className="hello">{greeting.text} {greeting.emoji}</div>
-              <div className="name">{memberName ? `Good ${greeting.text.split(" ")[1]}, ${memberName}` : church.name}</div>
+              <div className="hello">Home</div>
+              <div className="name">{church.name.split(" ").slice(0, 3).join(" ")}</div>
             </div>
           </div>
           <div className="dh-right">

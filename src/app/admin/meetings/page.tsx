@@ -388,7 +388,7 @@ export default function AdminMeetingsPage() {
   return (
     <>
       <style>{`
-        :root { --primary: #E8A838; --primary-light: #F5C76B; --primary-dark: #C48A2A; --bg: #0F0F0F; --surface: #1A1A1A; --surface-elevated: #242424; --surface-card: #1E1E1E; --surface-hover: #2A2A2A; --text-primary: #FFFFFF; --text-secondary: #A0A0A0; --text-tertiary: #6B6B6B; --border: #2A2A2A; --error: #FF6B6B; --success: #4ADE80; --info: #38BDF8; --warning: #FBBF24; --overlay: rgba(0,0,0,0.92); --gradient-start: #E8A838; --gradient-end: #D4762A; --gradient-purple: #8B5CF6; --gradient-blue: #3B82F6; --gradient-green: #22C55E; --gradient-red: #EF4444; --shadow-soft: 0 4px 20px rgba(232,168,56,0.15); --shadow-elevated: 0 8px 32px rgba(0,0,0,0.5); --radius-sm: 10px; --radius-md: 14px; --radius-lg: 18px; --radius-xl: 22px; --radius-full: 50%; }
+        :root { --primary: #E8A838; --primary-light: #F5C76B; --primary-dark: #B98A1F; --bg: #0F0D0A; --surface: #181512; --surface-elevated: #23201B; --surface-card: #1C1915; --surface-hover: #2B2720; --text-primary: #F7F5F0; --text-secondary: #A8A39A; --text-tertiary: #75706A; --border: #2B2720; --error: #F87171; --success: #34D399; --info: #60A5FA; --warning: #FBBF24; --overlay: rgba(0,0,0,0.92); --gradient-start: #E8A838; --gradient-end: #C9771D; --gradient-purple: #A78BFA; --gradient-blue: #60A5FA; --gradient-green: #22C55E; --gradient-red: #EF4444; --shadow-soft: 0 4px 20px rgba(232,168,56,0.16); --shadow-elevated: 0 10px 36px rgba(0,0,0,0.55); --radius-sm: 10px; --radius-md: 14px; --radius-lg: 18px; --radius-xl: 22px; --radius-full: 50%; }
         * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; font-family: Inter, -apple-system, BlinkMacSystemFont, sans-serif; }
         html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text-primary); }
         .app-container { height: 100%; display: flex; flex-direction: column; position: relative; overflow: hidden; }
@@ -401,7 +401,7 @@ export default function AdminMeetingsPage() {
         .header-title { font-size: 15px; font-weight: 700; line-height: 1.2; display: flex; align-items: center; gap: 8px; }
         .header-count { font-size: 12px; color: var(--text-tertiary); font-weight: 500; }
 
-        .content-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; padding-bottom: 100px; }
+        .content-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; padding-bottom: calc(100px + env(safe-area-inset-bottom, 0px)); }
         .content-scroll::-webkit-scrollbar { display: none; }
 
         .toolbar { display: flex; align-items: center; gap: 10px; padding: 12px 16px; flex-shrink: 0; background: var(--bg); }

@@ -219,21 +219,21 @@ export default function AdminRegisterPage() {
         :root {
           --primary: #E8A838;
           --primary-light: #F5C76B;
-          --primary-dark: #C48A2A;
-          --bg: #0F0F0F;
-          --surface: #1A1A1A;
-          --surface-elevated: #242424;
-          --surface-card: #1E1E1E;
-          --text-primary: #FFFFFF;
-          --text-secondary: #A0A0A0;
-          --text-tertiary: #6B6B6B;
-          --border: #2A2A2A;
-          --error: #FF6B6B;
-          --success: #4ADE80;
+          --primary-dark: #B98A1F;
+          --bg: #0F0D0A;
+          --surface: #181512;
+          --surface-elevated: #23201B;
+          --surface-card: #1C1915;
+          --text-primary: #F7F5F0;
+          --text-secondary: #A8A39A;
+          --text-tertiary: #75706A;
+          --border: #2B2720;
+          --error: #F87171;
+          --success: #34D399;
           --overlay: rgba(0,0,0,0.85);
           --gradient-start: #E8A838;
-          --gradient-end: #D4762A;
-          --shadow-soft: 0 4px 20px rgba(232,168,56,0.15);
+          --gradient-end: #C9771D;
+          --shadow-soft: 0 4px 20px rgba(232,168,56,0.16);
           --radius-full: 50%;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }

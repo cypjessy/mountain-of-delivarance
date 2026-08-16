@@ -107,7 +107,7 @@ export default function MeetingsPage() {
   return (
     <>
       <style>{`
-        :root { --primary: #E8A838; --primary-light: #F5C76B; --primary-dark: #C48A2A; --bg: #0F0F0F; --surface: #1A1A1A; --surface-elevated: #242424; --surface-card: #1E1E1E; --surface-hover: #2A2A2A; --text-primary: #FFFFFF; --text-secondary: #A0A0A0; --text-tertiary: #6B6B6B; --border: #2A2A2A; --error: #FF6B6B; --success: #4ADE80; --info: #38BDF8; --gradient-start: #E8A838; --gradient-end: #D4762A; --gradient-blue: #3B82F6; --gradient-purple: #8B5CF6; --shadow-soft: 0 4px 20px rgba(232,168,56,0.15); --shadow-elevated: 0 8px 32px rgba(0,0,0,0.5); --radius-sm: 10px; --radius-md: 14px; --radius-lg: 18px; --radius-xl: 22px; --radius-full: 50%; }
+        :root { --primary: #E8A838; --primary-light: #F5C76B; --primary-dark: #B98A1F; --bg: #0F0D0A; --surface: #181512; --surface-elevated: #23201B; --surface-card: #1C1915; --surface-hover: #2B2720; --text-primary: #F7F5F0; --text-secondary: #A8A39A; --text-tertiary: #75706A; --border: #2B2720; --error: #F87171; --success: #34D399; --info: #60A5FA; --gradient-start: #E8A838; --gradient-end: #C9771D; --gradient-blue: #60A5FA; --gradient-purple: #A78BFA; --shadow-soft: 0 4px 20px rgba(232,168,56,0.16); --shadow-elevated: 0 10px 36px rgba(0,0,0,0.55); --radius-sm: 10px; --radius-md: 14px; --radius-lg: 18px; --radius-xl: 22px; --radius-full: 50%; }
         * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; font-family: Inter, -apple-system, BlinkMacSystemFont, sans-serif; }
         html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text-primary); }
         .app-container { height: 100%; display: flex; flex-direction: column; position: relative; overflow: hidden; }
@@ -118,7 +118,7 @@ export default function MeetingsPage() {
         .header-title { font-size: 15px; font-weight: 700; line-height: 1.2; }
         .header-sub { font-size: 11px; color: var(--text-tertiary); margin-top: 1px; }
 
-        .content-scroll { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: 120px; }
+        .content-scroll { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: calc(120px + env(safe-area-inset-bottom, 0px)); }
         .content-scroll::-webkit-scrollbar { display: none; }
 
         .meetings-list { padding: 12px; display: flex; flex-direction: column; gap: 10px; }

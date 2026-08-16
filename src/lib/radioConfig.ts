@@ -58,7 +58,7 @@ export function defaultRadioConfig(): Omit<RadioConfigDoc, "updatedAt" | "update
   return {
     stationName: "MOD NAKURU Radio",
     description: "MOD NAKURU Radio Station",
-    stationId: "4",
+    stationId: "2",
     embedUrl: "https://azuracast.histoview.co.ke/public/mountain_of_delivarance_church/embed?autoplay=1&rounded=1&allow_popup=1&continuous=1",
     streamUrl: "",
   };

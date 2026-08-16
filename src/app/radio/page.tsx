@@ -102,24 +102,24 @@ export default function RadioPage() {
         :root {
           --primary: #E8A838;
           --primary-light: #F5C76B;
-          --primary-dark: #C48A2A;
-          --bg: #0F0F0F;
-          --surface: #1A1A1A;
-          --surface-elevated: #242424;
-          --surface-card: #1E1E1E;
-          --surface-hover: #2A2A2A;
-          --text-primary: #FFFFFF;
-          --text-secondary: #A0A0A0;
-          --text-tertiary: #6B6B6B;
-          --border: #2A2A2A;
-          --error: #FF6B6B;
-          --success: #4ADE80;
+          --primary-dark: #B98A1F;
+          --bg: #0F0D0A;
+          --surface: #181512;
+          --surface-elevated: #23201B;
+          --surface-card: #1C1915;
+          --surface-hover: #2B2720;
+          --text-primary: #F7F5F0;
+          --text-secondary: #A8A39A;
+          --text-tertiary: #75706A;
+          --border: #2B2720;
+          --error: #F87171;
+          --success: #34D399;
           --warning: #FBBF24;
-          --info: #38BDF8;
+          --info: #60A5FA;
           --gradient-start: #E8A838;
-          --gradient-end: #D4762A;
-          --shadow-soft: 0 4px 20px rgba(232,168,56,0.15);
-          --shadow-elevated: 0 8px 32px rgba(0,0,0,0.45);
+          --gradient-end: #C9771D;
+          --shadow-soft: 0 4px 20px rgba(232,168,56,0.16);
+          --shadow-elevated: 0 10px 36px rgba(0,0,0,0.55);
           --radius-sm: 10px;
           --radius-md: 14px;
           --radius-lg: 18px;
@@ -154,7 +154,7 @@ export default function RadioPage() {
         .listener-count i { font-size: 10px; color: var(--text-tertiary); }
 
         /* ===== CONTENT SCROLL ===== */
-        .content-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; padding-bottom: 80px; }
+        .content-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; padding-bottom: calc(80px + env(safe-area-inset-bottom, 0px)); }
         .content-scroll::-webkit-scrollbar { display: none; }
         .content-inner { padding: 12px; display: flex; flex-direction: column; gap: 16px; }
 
